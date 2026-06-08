@@ -29,11 +29,11 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFormLayout,
-    QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-    QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-    QTextEdit, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
+    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 import yugioh_db as ydb
@@ -222,6 +222,55 @@ class CardRepository:
             return int(row["n"]) if row else 0
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Karten-Suchdialog (für das Hinzufügen aus dem Deck-Tab)
+# ---------------------------------------------------------------------------
+
+class CardSearchDialog(QDialog):
+    def __init__(self, repo: "CardRepository", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Karte hinzufügen")
+        self.resize(420, 520)
+        self.repo = repo
+        self.selected_id: int | None = None
+
+        layout = QVBoxLayout(self)
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Name oder Kartentext suchen …")
+        self.search_box.textChanged.connect(self._search)
+        layout.addWidget(self.search_box)
+
+        self.list = QListWidget()
+        self.list.itemDoubleClicked.connect(self.accept)
+        layout.addWidget(self.list, stretch=1)
+
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Hinzufügen")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        self.search_box.setFocus()
+
+    def _search(self, text: str) -> None:
+        self.list.clear()
+        if not text.strip():
+            return
+        for c in self.repo.query(text=text, limit=80):
+            item = QListWidgetItem(c["name_de"] or c["name"])
+            item.setData(Qt.ItemDataRole.UserRole, c["id"])
+            self.list.addItem(item)
+        if self.list.count():
+            self.list.setCurrentRow(0)
+
+    def chosen_card_id(self) -> int | None:
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +528,10 @@ class ZonePanel(QGroupBox):
         self.list = QListWidget()
         v.addWidget(self.list)
 
+        add_btn = QPushButton("+ Karte hinzuf\u00fcgen")
+        add_btn.clicked.connect(lambda: owner.add_card_dialog(self.zone))
+        v.addWidget(add_btn)
+
         bar = QHBoxLayout()
         minus = QPushButton("\u22121")
         plus = QPushButton("+1")
@@ -716,6 +769,22 @@ class DeckView(QWidget):
             conn.close()
         natural = ydb.deck_zone_for(card["frame_type"], card["type"])
         ydb.move_deck_card(self.repo.db_path, self.deck_id, cid, "side", natural)
+        self.refresh()
+
+    def add_card_dialog(self, zone: str) -> None:
+        if self.deck_id is None:
+            return
+        dlg = CardSearchDialog(self.repo, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        card_id = dlg.chosen_card_id()
+        if card_id is None:
+            return
+        _added, msg = ydb.add_card_to_deck(
+            self.repo.db_path, self.deck_id, card_id, zone
+        )
+        if msg:
+            QMessageBox.information(self, "Deck", msg)
         self.refresh()
 
     # -- von aussen (Detailansicht der Suche) -------------------------------
