@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtuelle Umgebungen
+.venv/
+venv/
+env/
+
+# Von der App erzeugte Dateien
+*.sqlite3
+card_images/
+
+# PyInstaller (Standalone-Build)
+build/
+dist/
+*.spec
+
+# Editor / Betriebssystem
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
