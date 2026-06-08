@@ -118,7 +118,7 @@ class CardRepository:
             )
 
         sql = base + "".join(" AND " + c for c in clauses)
-        sql += " ORDER BY c.name LIMIT ?"
+        sql += (" ORDER BY cards_fts.rank LIMIT ?" if text.strip() else " ORDER BY c.name LIMIT ?")
         params.append(limit)
 
         conn = ydb._connect(self.db_path)
