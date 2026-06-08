@@ -211,10 +211,23 @@ def build_database(
 
         for c in cards:
             conn.execute(
-                """INSERT OR REPLACE INTO cards
+                """INSERT INTO cards
                    (id, name, type, frame_type, description, atk, def,
                     level, race, attribute, archetype, scale, link_value)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       name=excluded.name,
+                       type=excluded.type,
+                       frame_type=excluded.frame_type,
+                       description=excluded.description,
+                       atk=excluded.atk,
+                       def=excluded.def,
+                       level=excluded.level,
+                       race=excluded.race,
+                       attribute=excluded.attribute,
+                       archetype=excluded.archetype,
+                       scale=excluded.scale,
+                       link_value=excluded.link_value""",
                 (
                     c.get("id"),
                     c.get("name"),
