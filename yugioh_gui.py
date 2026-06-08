@@ -26,8 +26,8 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -41,6 +41,35 @@ import yugioh_db as ydb
 # Standard-Bildquelle. Bilder werden lokal zwischengespeichert (kein Hotlinking).
 # Bei Bedarf gegen die in der API gelieferte card_images-URL austauschbar.
 IMAGE_URL = "https://images.ygoprodeck.com/images/cards/{}.jpg"
+
+# ---------------------------------------------------------------------------
+# Asynchroner Bild-Loader
+# ---------------------------------------------------------------------------
+
+class _ImageSignals(QObject):
+    loaded = Signal(int, QImage)  # (card_id, image)
+    failed = Signal(int)          # card_id
+
+
+class _ImageLoader(QRunnable):
+    def __init__(self, card_id: int, url: str, signals: _ImageSignals):
+        super().__init__()
+        self._card_id = card_id
+        self._url = url
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            path = ydb.cache_image(self._card_id, self._url)
+            img = QImage(str(path))
+            if img.isNull():
+                self._signals.failed.emit(self._card_id)
+            else:
+                self._signals.loaded.emit(self._card_id, img)
+        except Exception:
+            self._signals.failed.emit(self._card_id)
+
 
 # ---------------------------------------------------------------------------
 # Übersetzungstabellen (Englisch → Deutsch)
@@ -282,6 +311,9 @@ class DetailPanel(QWidget):
         super().__init__()
         self.repo = repo
         self.current_id: int | None = None
+        self._img_signals = _ImageSignals()
+        self._img_signals.loaded.connect(self._on_image_loaded)
+        self._img_signals.failed.connect(self._on_image_failed)
 
         layout = QVBoxLayout(self)
 
@@ -391,21 +423,33 @@ class DetailPanel(QWidget):
 
     def _load_image(self, card_id: int) -> None:
         path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
-        if not os.path.exists(path):
-            # Einmaliger Download; blockiert kurz -- spaeter in Worker-Thread auslagern.
-            try:
-                ydb.cache_image(card_id, IMAGE_URL.format(card_id))
-            except Exception:
-                path = None
-        if path and os.path.exists(path):
+        if os.path.exists(path):
             pix = QPixmap(path).scaled(
                 220, 320,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             self.image.setPixmap(pix)
-        else:
-            self.image.setText("(Bild offline nicht verfügbar)")
+            return
+        self.image.setText("Lade …")
+        QThreadPool.globalInstance().start(
+            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
+        )
+
+    def _on_image_loaded(self, card_id: int, img: QImage) -> None:
+        if card_id != self.current_id:
+            return
+        pix = QPixmap.fromImage(img).scaled(
+            220, 320,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image.setPixmap(pix)
+
+    def _on_image_failed(self, card_id: int) -> None:
+        if card_id != self.current_id:
+            return
+        self.image.setText("(Bild offline nicht verfügbar)")
 
     def _add_to_collection(self) -> None:
         if self.current_id is None:
@@ -1023,6 +1067,10 @@ class MainWindow(QMainWindow):
         if self.repo.exists():
             ydb.ensure_schema(db_path)  # ggf. fehlende Tabellen nachruesten
         self._loading = True  # unterdrueckt Suche waehrend Initialisierung
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self.search)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_filter_panel())
@@ -1127,7 +1175,7 @@ class MainWindow(QMainWindow):
 
     def _on_filter_changed(self, *_):
         if not self._loading:
-            self.search()
+            self._search_timer.start()
 
     def search(self) -> None:
         if not self.repo.exists():
