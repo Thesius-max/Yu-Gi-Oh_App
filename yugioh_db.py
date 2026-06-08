@@ -577,7 +577,7 @@ def add_card_to_deck(
             return (0, "Unbekannte Zone.")
         if zone != "side" and zone != natural:
             target = "Extra Deck" if natural == "extra" else "Main Deck"
-            return (0, f"Diese Karte gehoert ins {target}.")
+            return (0, f"Diese Karte gehört ins {target}.")
 
         allowed = max(0, MAX_COPIES - _total_copies(conn, deck_id, card_id))
         add = min(count, allowed)
@@ -602,7 +602,7 @@ def add_card_to_deck(
                 (deck_id, card_id, zone, add),
             )
         conn.commit()
-        msg = "" if add == count else f"Nur {add} hinzugefuegt ({MAX_COPIES}-Kopien-Grenze)."
+        msg = "" if add == count else f"Nur {add} hinzugefügt ({MAX_COPIES}-Kopien-Grenze)."
         return (add, msg)
     finally:
         conn.close()
@@ -992,6 +992,6 @@ if __name__ == "__main__":
         n = build_database(db)
         print(f"Fertig: {n} Karten in {db} importiert.")
     elif cmd == "check":
-        print("Update verfuegbar." if needs_update(db) else "Datenbank ist aktuell.")
+        print("Update verfügbar." if needs_update(db) else "Datenbank ist aktuell.")
     else:
         print("Verwendung: python yugioh_db.py [build|check] [db_pfad]")

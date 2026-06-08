@@ -59,7 +59,7 @@ class CardRepository:
 
     def distinct(self, column: str) -> list[str]:
         if column not in self._FILTER_COLUMNS:
-            raise ValueError(f"Unzulaessige Spalte: {column}")
+            raise ValueError(f"Unzulässige Spalte: {column}")
         conn = ydb._connect(self.db_path)
         try:
             rows = conn.execute(
@@ -152,7 +152,7 @@ class DetailPanel(QWidget):
 
         layout = QVBoxLayout(self)
 
-        self.image = QLabel("Keine Karte ausgewaehlt")
+        self.image = QLabel("Keine Karte ausgewählt")
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumSize(220, 320)
         self.image.setStyleSheet("border: 1px solid #555; color: #888;")
@@ -173,7 +173,7 @@ class DetailPanel(QWidget):
         self.owned = QLabel("im Bestand: 0")
         self.qty = QSpinBox()
         self.qty.setRange(1, 99)
-        self.add_btn = QPushButton("Hinzufuegen")
+        self.add_btn = QPushButton("Hinzufügen")
         self.add_btn.clicked.connect(self._add_to_collection)
         coll_layout.addWidget(self.owned)
         coll_layout.addStretch()
@@ -270,7 +270,7 @@ class DetailPanel(QWidget):
             )
             self.image.setPixmap(pix)
         else:
-            self.image.setText("(Bild offline nicht verfuegbar)")
+            self.image.setText("(Bild offline nicht verfügbar)")
 
     def _add_to_collection(self) -> None:
         if self.current_id is None:
@@ -296,7 +296,7 @@ class CollectionView(QWidget):
         self.summary = QLabel("")
         refresh_btn = QPushButton("Aktualisieren")
         refresh_btn.clicked.connect(self.refresh)
-        self.remove_btn = QPushButton("Ausgewaehlten Eintrag entfernen")
+        self.remove_btn = QPushButton("Ausgewählten Eintrag entfernen")
         self.remove_btn.clicked.connect(self._remove_selected)
         toolbar.addWidget(self.summary)
         toolbar.addStretch()
@@ -369,7 +369,7 @@ class CollectionView(QWidget):
     def _update_summary(self) -> None:
         entries, unique, total = ydb.collection_stats(self.repo.db_path)
         self.summary.setText(
-            f"{entries} Eintraege  ·  {unique} verschiedene Karten  ·  "
+            f"{entries} Einträge  ·  {unique} verschiedene Karten  ·  "
             f"{total} Karten gesamt"
         )
 
@@ -440,7 +440,7 @@ class DeckView(QWidget):
         self.deck_cb.currentIndexChanged.connect(self._on_deck_selected)
         new_btn = QPushButton("Neues Deck")
         new_btn.clicked.connect(self._new_deck)
-        del_btn = QPushButton("Deck loeschen")
+        del_btn = QPushButton("Deck löschen")
         del_btn.clicked.connect(self._delete_deck)
         top.addWidget(QLabel("Deck:"))
         top.addWidget(self.deck_cb, stretch=1)
@@ -466,7 +466,7 @@ class DeckView(QWidget):
         self.combo_list = QListWidget()
         self.combo_list.currentItemChanged.connect(self._on_combo_selected)
         cv.addWidget(self.combo_list, stretch=1)
-        cv.addWidget(QLabel("Bausteine (vorhanden / benoetigt):"))
+        cv.addWidget(QLabel("Bausteine (vorhanden / benötigt):"))
         self.combo_pieces = QListWidget()
         cv.addWidget(self.combo_pieces, stretch=1)
         self.add_missing_btn = QPushButton("Fehlende Bausteine ins Deck")
@@ -518,8 +518,8 @@ class DeckView(QWidget):
         if self.deck_id is None:
             return
         reply = QMessageBox.question(
-            self, "Deck loeschen",
-            f"Deck '{self.deck_cb.currentText()}' loeschen?",
+            self, "Deck löschen",
+            f"Deck '{self.deck_cb.currentText()}' löschen?",
         )
         if reply == QMessageBox.StandardButton.Yes:
             ydb.delete_deck(self.repo.db_path, self.deck_id)
@@ -532,7 +532,7 @@ class DeckView(QWidget):
             for p in self.panels.values():
                 p.list.clear()
             self.status.setText(
-                "Kein Deck ausgewaehlt. Lege ueber 'Neues Deck' eines an."
+                "Kein Deck ausgewählt. Lege über 'Neues Deck' eines an."
             )
             self._refresh_combos()
             return
@@ -638,7 +638,7 @@ class DeckView(QWidget):
         if self.deck_id is None:
             QMessageBox.information(
                 self, "Kein Deck",
-                "Bitte zuerst im Tab 'Deck' ein Deck anlegen oder auswaehlen.",
+                "Bitte zuerst im Tab 'Deck' ein Deck anlegen oder auswählen.",
             )
             return (0, "")
         zone = "side" if to_side else None
@@ -671,7 +671,7 @@ class ComboView(QWidget):
         btn_row = QHBoxLayout()
         new_btn = QPushButton("Neue Kombo")
         new_btn.clicked.connect(self._new_combo)
-        del_btn = QPushButton("Loeschen")
+        del_btn = QPushButton("Löschen")
         del_btn.clicked.connect(self._delete_combo)
         btn_row.addWidget(new_btn)
         btn_row.addWidget(del_btn)
@@ -703,7 +703,7 @@ class ComboView(QWidget):
         piece_row.addStretch()
         rv.addLayout(piece_row)
         rv.addWidget(QLabel(
-            "Karten ueber den Tab 'Suche' mit '+ als Baustein' hinzufuegen."
+            "Karten über den Tab 'Suche' mit '+ als Baustein' hinzufügen."
         ))
 
         rv.addWidget(QLabel("Schritte (eine Zeile pro Schritt):"))
@@ -793,8 +793,8 @@ class ComboView(QWidget):
         if self.combo_id is None:
             return
         reply = QMessageBox.question(
-            self, "Kombo loeschen",
-            f"Kombo '{self.name_edit.text()}' loeschen?",
+            self, "Kombo löschen",
+            f"Kombo '{self.name_edit.text()}' löschen?",
         )
         if reply == QMessageBox.StandardButton.Yes:
             ydb.delete_combo(self.repo.db_path, self.combo_id)
@@ -848,7 +848,7 @@ class ComboView(QWidget):
         if self.combo_id is None:
             QMessageBox.information(
                 self, "Keine Kombo",
-                "Bitte zuerst im Tab 'Kombos' eine Kombo anlegen oder auswaehlen.",
+                "Bitte zuerst im Tab 'Kombos' eine Kombo anlegen oder auswählen.",
             )
             return
         ydb.add_combo_card(self.repo.db_path, self.combo_id, card_id, 1)
