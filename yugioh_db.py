@@ -526,7 +526,6 @@ def list_decks(db_path: str) -> list[sqlite3.Row]:
 def delete_deck(db_path: str, deck_id: int) -> None:
     conn = _connect(db_path)
     try:
-        conn.execute("DELETE FROM deck_cards WHERE deck_id = ?", (deck_id,))
         conn.execute("DELETE FROM decks WHERE deck_id = ?", (deck_id,))
         conn.commit()
     finally:
@@ -817,8 +816,6 @@ def update_combo(
 def delete_combo(db_path: str, combo_id: int) -> None:
     conn = _connect(db_path)
     try:
-        conn.execute("DELETE FROM combo_steps WHERE combo_id = ?", (combo_id,))
-        conn.execute("DELETE FROM combo_cards WHERE combo_id = ?", (combo_id,))
         conn.execute("DELETE FROM combos WHERE combo_id = ?", (combo_id,))
         conn.commit()
     finally:
