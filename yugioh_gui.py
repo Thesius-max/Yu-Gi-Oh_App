@@ -234,7 +234,7 @@ class DetailPanel(QWidget):
 
     def show_card(self, card) -> None:
         self.current_id = card["id"]
-        self.name.setText(card["name"])
+        self.name.setText(card["name_de"] or card["name"])
 
         parts = []
         if card["type"]:
@@ -248,7 +248,7 @@ class DetailPanel(QWidget):
         if card["archetype"]:
             parts.append(f"Archetyp: {card['archetype']}")
         self.stats.setText("  •  ".join(parts))
-        self.text.setPlainText(card["description"] or "")
+        self.text.setPlainText(card["desc_de"] or card["description"] or "")
 
         self._load_image(card["id"])
         self.owned.setText(f"im Bestand: {self.repo.owned_count(card['id'])}")
@@ -990,7 +990,7 @@ class MainWindow(QMainWindow):
             stat = ""
             if c["atk"] is not None:
                 stat = f"  [ATK {c['atk']} / DEF {c['def']}]"
-            item = QListWidgetItem(f"{c['name']}{stat}")
+            item = QListWidgetItem(f"{c['name_de'] or c['name']}{stat}")
             item.setData(Qt.ItemDataRole.UserRole, c["id"])
             self.results.addItem(item)
         self.count_label.setText(f"{len(cards)} Treffer")

@@ -47,8 +47,15 @@ def _http_get_json(url: str, timeout: int = 60) -> dict:
 
 def fetch_all_cards() -> list[dict]:
     """Holt die komplette Kartenliste in EINEM Request (kein Rate-Limit-Problem)."""
-    payload = _http_get_json(CARDINFO_URL)
+    payload = _http_get_json(CARDINFO_URL, timeout=120)
     return payload.get("data", [])
+
+
+def fetch_all_cards_de() -> dict[int, dict]:
+    """Holt die deutschen Kartendaten; Rueckgabe: dict {id -> Karten-dict}.
+    Nicht alle Karten haben eine Uebersetzung -- fehlende bleiben einfach leer."""
+    payload = _http_get_json(CARDINFO_URL + "?language=de", timeout=120)
+    return {c["id"]: c for c in payload.get("data", [])}
 
 
 def fetch_db_version() -> Optional[str]:
@@ -76,9 +83,11 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS cards (
     id          INTEGER PRIMARY KEY,   -- passcode der Karte
     name        TEXT NOT NULL,
+    name_de     TEXT,                  -- deutscher Name (NULL wenn keine Übersetzung)
     type        TEXT,                  -- z.B. "Effect Monster", "Spell Card"
     frame_type  TEXT,                  -- z.B. "effect", "spell", "xyz"
-    description TEXT,                   -- Kartentext
+    description TEXT,                   -- Kartentext (englisch)
+    desc_de     TEXT,                  -- Kartentext (deutsch, NULL wenn keine Übersetzung)
     atk         INTEGER,
     def         INTEGER,
     level       INTEGER,               -- Level / Rank
@@ -103,9 +112,9 @@ CREATE TABLE IF NOT EXISTS card_sets (
 );
 CREATE INDEX IF NOT EXISTS idx_card_sets_card ON card_sets(card_id);
 
--- Volltextsuche ueber Name + Kartentext.
+-- Volltextsuche ueber Name + Kartentext (deutsch + englisch).
 CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
-    name, description, content='cards', content_rowid='id'
+    name, description, name_de, desc_de, content='cards', content_rowid='id'
 );
 
 -- DEIN Bestand: was du besitzt. Getrennt von der Referenz.
@@ -173,6 +182,12 @@ def ensure_schema(db_path: str = DEFAULT_DB) -> None:
     conn = _connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        # Migration fuer bestehende DBs, die name_de / desc_de noch nicht haben.
+        for col in ("name_de", "desc_de"):
+            try:
+                conn.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # Spalte existiert bereits
         conn.commit()
     finally:
         conn.close()
@@ -199,22 +214,38 @@ def build_database(
         cards = fetch_all_cards()
         if db_version is None:
             db_version = fetch_db_version()
+        de_by_id = fetch_all_cards_de()
+    else:
+        de_by_id: dict[int, dict] = {}
     cards = list(cards)
 
     conn = _connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        # Migration fuer bestehende DBs, die name_de / desc_de noch nicht haben.
+        for col in ("name_de", "desc_de"):
+            try:
+                conn.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         # Karten per UPSERT aktualisieren statt zu loeschen -- sonst wuerden
         # Fremdschluessel aus collection/deck_cards beim Update brechen.
         conn.execute("DELETE FROM card_sets;")
-        conn.execute("DELETE FROM cards_fts;")
+        # FTS droppen und mit aktualisiertem Schema (inkl. DE-Spalten) neu anlegen.
+        conn.execute("DROP TABLE IF EXISTS cards_fts;")
+        conn.execute(
+            "CREATE VIRTUAL TABLE cards_fts USING fts5("
+            "name, description, name_de, desc_de, content='cards', content_rowid='id')"
+        )
 
         for c in cards:
+            de = de_by_id.get(c.get("id"), {})
             conn.execute(
                 """INSERT INTO cards
                    (id, name, type, frame_type, description, atk, def,
-                    level, race, attribute, archetype, scale, link_value)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    level, race, attribute, archetype, scale, link_value,
+                    name_de, desc_de)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                        name=excluded.name,
                        type=excluded.type,
@@ -227,7 +258,9 @@ def build_database(
                        attribute=excluded.attribute,
                        archetype=excluded.archetype,
                        scale=excluded.scale,
-                       link_value=excluded.link_value""",
+                       link_value=excluded.link_value,
+                       name_de=excluded.name_de,
+                       desc_de=excluded.desc_de""",
                 (
                     c.get("id"),
                     c.get("name"),
@@ -242,6 +275,8 @@ def build_database(
                     c.get("archetype"),
                     c.get("scale"),
                     c.get("linkval"),
+                    de.get("name"),
+                    de.get("desc"),
                 ),
             )
             for s in c.get("card_sets", []) or []:
@@ -256,10 +291,10 @@ def build_database(
                     ),
                 )
 
-        # FTS-Index aus den Stammdaten neu aufbauen.
+        # FTS-Index aus den Stammdaten neu aufbauen (deutsch + englisch).
         conn.execute(
-            "INSERT INTO cards_fts (rowid, name, description) "
-            "SELECT id, name, description FROM cards;"
+            "INSERT INTO cards_fts (rowid, name, description, name_de, desc_de) "
+            "SELECT id, name, description, name_de, desc_de FROM cards;"
         )
 
         if db_version:
@@ -988,7 +1023,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
 
     if cmd == "build":
-        print("Lade Kartendatenbank von der API ...")
+        print("Lade Kartendatenbank von der API (englisch + deutsch) ...")
         n = build_database(db)
         print(f"Fertig: {n} Karten in {db} importiert.")
     elif cmd == "check":
