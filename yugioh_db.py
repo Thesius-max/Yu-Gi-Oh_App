@@ -284,6 +284,8 @@ def needs_update(db_path: str = DEFAULT_DB) -> bool:
             "SELECT value FROM meta WHERE key='db_version';"
         ).fetchone()
         local = row["value"] if row else None
+    except sqlite3.OperationalError:
+        return False
     finally:
         conn.close()
     return remote != local
