@@ -42,6 +42,90 @@ import yugioh_db as ydb
 # Bei Bedarf gegen die in der API gelieferte card_images-URL austauschbar.
 IMAGE_URL = "https://images.ygoprodeck.com/images/cards/{}.jpg"
 
+# ---------------------------------------------------------------------------
+# Übersetzungstabellen (Englisch → Deutsch)
+# ---------------------------------------------------------------------------
+
+_ATTR_DE: dict[str, str] = {
+    "DARK":   "FINSTERNIS",
+    "DIVINE": "GÖTTLICH",
+    "EARTH":  "ERDE",
+    "FIRE":   "FEUER",
+    "LIGHT":  "LICHT",
+    "WATER":  "WASSER",
+    "WIND":   "WIND",
+}
+
+_TYPE_DE: dict[str, str] = {
+    "Effect Monster":                  "Effekt-Monster",
+    "Flip Effect Monster":             "Flipp-Effekt-Monster",
+    "Flip Tuner Effect Monster":       "Flipp-Tuner-Effekt-Monster",
+    "Fusion Monster":                  "Fusionsmonster",
+    "Gemini Monster":                  "Gemini-Monster",
+    "Link Monster":                    "Linkmonster",
+    "Normal Monster":                  "Normalmonster",
+    "Normal Tuner Monster":            "Tuner (Normal)",
+    "Pendulum Effect Fusion Monster":  "Pendel-Effekt-Fusionsmonster",
+    "Pendulum Effect Monster":         "Pendel-Effekt-Monster",
+    "Pendulum Effect Ritual Monster":  "Pendel-Effekt-Ritualmonster",
+    "Pendulum Flip Effect Monster":    "Pendel-Flipp-Effekt-Monster",
+    "Pendulum Normal Monster":         "Pendel-Normalmonster",
+    "Pendulum Tuner Effect Monster":   "Pendel-Tuner-Effekt-Monster",
+    "Ritual Effect Monster":           "Ritual-Effekt-Monster",
+    "Ritual Monster":                  "Ritualmonster",
+    "Skill Card":                      "Skill-Karte",
+    "Spell Card":                      "Zauberkarte",
+    "Spirit Monster":                  "Geist-Monster",
+    "Synchro Monster":                 "Synchromonster",
+    "Synchro Pendulum Effect Monster": "Synchro-Pendel-Effekt-Monster",
+    "Synchro Tuner Monster":           "Synchro-Tuner",
+    "Token":                           "Spielmarke",
+    "Toon Monster":                    "Toon-Monster",
+    "Trap Card":                       "Fallenkarte",
+    "Tuner Monster":                   "Tuner",
+    "Union Effect Monster":            "Union-Effekt-Monster",
+    "XYZ Monster":                     "Xyz-Monster",
+    "XYZ Pendulum Effect Monster":     "Xyz-Pendel-Effekt-Monster",
+}
+
+_RACE_DE: dict[str, str] = {
+    # Monster-Typen
+    "Aqua":         "Aqua",
+    "Beast":        "Ungeheuer",
+    "Beast-Warrior":"Ungeheuer-Krieger",
+    "Creator God":  "Creator God",
+    "Cyberse":      "Cyberse",
+    "Dinosaur":     "Dinosaurier",
+    "Divine-Beast": "Göttliches Ungeheuer",
+    "Dragon":       "Drache",
+    "Fairy":        "Fee",
+    "Fiend":        "Unterweltler",
+    "Fish":         "Fisch",
+    "Illusion":     "Illusion",
+    "Insect":       "Insekt",
+    "Machine":      "Maschine",
+    "Plant":        "Pflanze",
+    "Psychic":      "Psi",
+    "Pyro":         "Pyro",
+    "Reptile":      "Reptil",
+    "Rock":         "Fels",
+    "Sea Serpent":  "Seeschlange",
+    "Spellcaster":  "Hexer",
+    "Thunder":      "Donner",
+    "Warrior":      "Krieger",
+    "Winged Beast": "Geflügeltes Ungeheuer",
+    "Wyrm":         "Wyrm",
+    "Zombie":       "Zombie",
+    # Zauber/Fallen-Untertypen
+    "Continuous":   "Permanent",
+    "Counter":      "Konter",
+    "Equip":        "Ausrüstung",
+    "Field":        "Feld",
+    "Normal":       "Normal",
+    "Quick-Play":   "Schnelleffekt",
+    "Ritual":       "Ritual",
+}
+
 
 # ---------------------------------------------------------------------------
 # Datenzugriff -- kapselt alle SQL-Abfragen, die die UI braucht
@@ -238,9 +322,11 @@ class DetailPanel(QWidget):
 
         parts = []
         if card["type"]:
-            parts.append(card["type"])
+            parts.append(_TYPE_DE.get(card["type"], card["type"]))
+        if card["race"]:
+            parts.append(_RACE_DE.get(card["race"], card["race"]))
         if card["attribute"]:
-            parts.append(card["attribute"])
+            parts.append(_ATTR_DE.get(card["attribute"], card["attribute"]))
         if card["level"] is not None:
             parts.append(f"Stufe {card['level']}")
         if card["atk"] is not None or card["def"] is not None:
@@ -958,14 +1044,16 @@ class MainWindow(QMainWindow):
         return panel
 
     def _populate_filters(self) -> None:
+        _col_trans = {"type": _TYPE_DE, "attribute": _ATTR_DE}
         for cb, col in (
             (self.type_cb, "type"),
             (self.attr_cb, "attribute"),
             (self.arch_cb, "archetype"),
         ):
+            trans = _col_trans.get(col, {})
             cb.blockSignals(True)
             for val in self.repo.distinct(col):
-                cb.addItem(val, val)
+                cb.addItem(trans.get(val, val), val)
             cb.blockSignals(False)
 
     def _on_filter_changed(self, *_):
