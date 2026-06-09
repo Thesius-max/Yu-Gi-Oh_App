@@ -541,7 +541,10 @@ class CollectionView(QWidget):
             group = buckets[cat]
             if not group:
                 continue
-            self._add_header_row(_CATEGORY_DE[cat], len(group))
+            # Gesamtmenge der Karten zählen (nicht Einträge), wie im Deck.
+            self._add_header_row(
+                _CATEGORY_DE[cat], sum(row["quantity"] for row in group)
+            )
             for row in group:
                 self._add_data_row(row)
         self._update_summary()
