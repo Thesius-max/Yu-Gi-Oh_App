@@ -1215,6 +1215,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Yu-Gi-Oh -- Sammlung & Suche")
         self.resize(1100, 700)
         self.repo = CardRepository(db_path)
+        # Gepackter Erststart: mitgelieferte Seed-DB in den Nutzerordner kopieren.
+        ydb.ensure_user_db(db_path)
         if self.repo.exists():
             ydb.ensure_schema(db_path)  # ggf. fehlende Tabellen nachruesten
         self._loading = True  # unterdrueckt Suche waehrend Initialisierung
@@ -1249,6 +1251,13 @@ class MainWindow(QMainWindow):
 
         if self.repo.exists():
             self._populate_filters()
+        elif getattr(sys, "frozen", False):
+            QMessageBox.warning(
+                self, "Datenbank fehlt",
+                "Die mitgelieferte Kartendatenbank konnte nicht angelegt werden.\n\n"
+                "Bitte die Anwendung neu installieren oder den Entwickler "
+                "informieren.",
+            )
         else:
             QMessageBox.information(
                 self, "Datenbank fehlt",

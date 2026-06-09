@@ -22,7 +22,10 @@ anzeigen will, laedt sie einmal herunter und legt sie lokal ab
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Iterable, Optional
@@ -31,8 +34,55 @@ API_BASE = "https://db.ygoprodeck.com/api/v7"
 CARDINFO_URL = f"{API_BASE}/cardinfo.php"
 DBVER_URL = f"{API_BASE}/checkDBVer.php"
 
-DEFAULT_DB = "yugioh.sqlite3"
-IMAGE_DIR = "card_images"
+APP_DIR_NAME = "YugiohSammlung"
+
+
+def _app_data_dir() -> Path:
+    """Plattformueblicher, beschreibbarer Ort fuer Nutzerdaten (nur stdlib,
+    damit diese Datei Qt-frei bleibt). Wird fuer den gepackten Build genutzt."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    d = Path(base) / APP_DIR_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# Im gepackten Zustand (PyInstaller setzt sys.frozen) liegen DB und Bilder im
+# Nutzerordner -- das Bundle selbst ist u.U. schreibgeschuetzt/fluechtig.
+# Im Entwicklungsbetrieb bleibt es beim relativen Pfad (eigene Test-DB).
+if getattr(sys, "frozen", False):
+    _DATA_DIR = _app_data_dir()
+    DEFAULT_DB = str(_DATA_DIR / "yugioh.sqlite3")
+    IMAGE_DIR = str(_DATA_DIR / "card_images")
+else:
+    DEFAULT_DB = "yugioh.sqlite3"
+    IMAGE_DIR = "card_images"
+
+
+def bundled_seed_path() -> Optional[Path]:
+    """Pfad zur mitgelieferten Seed-Datenbank im PyInstaller-Bundle, sonst None."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base is None:
+        return None
+    seed = Path(base) / "seed.sqlite3"
+    return seed if seed.exists() else None
+
+
+def ensure_user_db(db_path: str = DEFAULT_DB) -> bool:
+    """Erststart im gepackten Build: mitgelieferte Seed-DB in den Nutzerordner
+    kopieren, falls dort noch keine DB liegt. Rueckgabe: True, wenn danach eine
+    DB existiert."""
+    if os.path.exists(db_path):
+        return True
+    seed = bundled_seed_path()
+    if seed is not None:
+        shutil.copy(seed, db_path)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
