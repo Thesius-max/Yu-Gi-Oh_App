@@ -63,12 +63,35 @@ neuere Datenbankversion bereitstellt.
 - Im **Kombos**-Tab eine Kombo anlegen, ihre Bausteine pflegen und die
   Schritte erfassen (eine Zeile pro Schritt).
 
+## Verteilbares Bundle bauen (für Tester)
+
+Für Endnutzer/Tester ohne Python lässt sich ein eigenständiges Bundle erzeugen
+(PyInstaller, One-Folder). Die Kartendatenbank wird als `seed.sqlite3`
+mitgeliefert und beim ersten Start in den Nutzerordner kopiert
+(`%LOCALAPPDATA%\YugiohSammlung\` bzw. `~/Library/Application Support/…`);
+dort liegen anschließend Sammlung, Decks, Kombos und Bilder.
+
+```bash
+pip install pyinstaller
+python yugioh_db.py build seed.sqlite3   # einmalig die Seed-DB erzeugen
+python build_app.py                      # Bundle nach dist/YugiohSammlung/
+```
+
+Anschließend `dist/YugiohSammlung/` zippen und weitergeben. Die mitgelieferte
+`TESTER_LIESMICH.txt` erklärt Tester*innen Start, SmartScreen-Hinweis,
+Datenort und Feedback-Weg.
+
+**Hinweis:** PyInstaller kann nicht cross-kompilieren – ein Windows-Build muss
+auf Windows, ein macOS-`.app` auf einem Mac erzeugt werden. Das Skript läuft auf
+beiden Plattformen identisch.
+
 ## Projektstruktur
 
 ```
 yugioh_db.py     Datenschicht: API-Abruf, SQLite-Schema, Suche, Sammlung,
                  Decks und Kombos (nur Standardbibliothek)
 yugioh_gui.py    PySide6-Oberfläche mit den vier Tabs
+build_app.py     Erzeugt das verteilbare PyInstaller-Bundle
 requirements.txt Abhängigkeiten
 ```
 
