@@ -1012,6 +1012,53 @@ def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
     return out
 
 
+def combo_coverage_collection(db_path: str, combo_id: int) -> dict:
+    """Abgleich einer Kombo mit der eigenen Sammlung (collection).
+    Gleiche Struktur wie combo_coverage, aber 'have' zaehlt den Bestand --
+    beantwortet: 'Welche Bausteine besitze ich schon?'"""
+    conn = _connect(db_path)
+    try:
+        pieces = conn.execute(
+            """SELECT cc.card_id, c.name, c.type, c.frame_type,
+                      cc.quantity AS needed,
+                      COALESCE((SELECT SUM(col.quantity) FROM collection col
+                                WHERE col.card_id = cc.card_id), 0) AS have
+               FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
+               WHERE cc.combo_id = ? ORDER BY c.name""",
+            (combo_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    result, covered = [], 0
+    for p in pieces:
+        missing = max(0, p["needed"] - p["have"])
+        if missing == 0:
+            covered += 1
+        result.append({
+            "card_id": p["card_id"], "name": p["name"], "type": p["type"],
+            "frame_type": p["frame_type"], "needed": p["needed"],
+            "have": p["have"], "missing": missing,
+        })
+    return {"total": len(result), "covered": covered, "pieces": result}
+
+
+def combos_for_collection(db_path: str) -> list[dict]:
+    """Alle Kombos mit ihrer Abdeckung gegen die Sammlung, nach Abdeckung sortiert.
+    Beantwortet: 'Welche Kombos kann ich mit meinen Karten bauen?'"""
+    out = []
+    for cb in list_combos(db_path):
+        cov = combo_coverage_collection(db_path, cb["combo_id"])
+        total = cov["total"]
+        out.append({
+            "combo_id": cb["combo_id"], "name": cb["name"],
+            "archetype": cb["archetype"], "total": total,
+            "covered": cov["covered"],
+            "coverage": (cov["covered"] / total) if total else 0.0,
+        })
+    out.sort(key=lambda x: (-x["coverage"], x["name"]))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # CLI: erstes Befuellen / Update
 # ---------------------------------------------------------------------------

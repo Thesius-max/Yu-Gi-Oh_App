@@ -923,6 +923,16 @@ class ComboView(QWidget):
             "Karten über den Tab 'Suche' mit '+ als Baustein' hinzufügen."
         ))
 
+        # Abgleich der Bausteine mit der eigenen Sammlung.
+        coll_box = QGroupBox("Mit deiner Sammlung")
+        cb_l = QVBoxLayout(coll_box)
+        self.coll_status = QLabel("")
+        self.coll_status.setWordWrap(True)
+        cb_l.addWidget(self.coll_status)
+        self.coll_missing = QListWidget()
+        cb_l.addWidget(self.coll_missing)
+        rv.addWidget(coll_box, stretch=1)
+
         rv.addWidget(QLabel("Schritte (eine Zeile pro Schritt):"))
         self.steps_edit = QTextEdit()
         rv.addWidget(self.steps_edit, stretch=1)
@@ -947,8 +957,7 @@ class ComboView(QWidget):
         self.combo_list.clear()
         combos = ydb.list_combos(self.repo.db_path) if self.repo.exists() else []
         for c in combos:
-            suffix = f"   [{c['archetype']}]" if c["archetype"] else ""
-            item = QListWidgetItem(f"{c['name']}{suffix}")
+            item = QListWidgetItem(self._combo_label(c))
             item.setData(Qt.ItemDataRole.UserRole, c["combo_id"])
             self.combo_list.addItem(item)
         self.combo_list.blockSignals(False)
@@ -958,12 +967,59 @@ class ComboView(QWidget):
             self._clear_editor()
             self.editor.setEnabled(False)
 
+    def _combo_label(self, combo) -> str:
+        """Listentext einer Kombo inkl. Baubarkeit aus der Sammlung
+        (✓ = vollständig baubar, sonst 'vorhanden/gesamt')."""
+        arch = f"   [{combo['archetype']}]" if combo["archetype"] else ""
+        cov = ydb.combo_coverage_collection(self.repo.db_path, combo["combo_id"])
+        if cov["total"] == 0:
+            mark = ""
+        elif cov["covered"] == cov["total"]:
+            mark = "   ✓"
+        else:
+            mark = f"   ({cov['covered']}/{cov['total']})"
+        return f"{combo['name']}{arch}{mark}"
+
     def _select_combo(self, combo_id: int) -> bool:
         for i in range(self.combo_list.count()):
             if self.combo_list.item(i).data(Qt.ItemDataRole.UserRole) == combo_id:
                 self.combo_list.setCurrentRow(i)
                 return True
         return False
+
+    def _update_current_label(self) -> None:
+        """Aktualisiert nur den Listeneintrag der aktiven Kombo (ohne die
+        Liste neu aufzubauen, damit ungespeicherte Editor-Eingaben bleiben)."""
+        item = self.combo_list.currentItem()
+        if item is None or self.combo_id is None:
+            return
+        combo = ydb.get_combo(self.repo.db_path, self.combo_id)
+        if combo is not None:
+            item.setText(self._combo_label(combo))
+
+    def _refresh_collection_coverage(self) -> None:
+        """Zeigt, welche Bausteine der aktiven Kombo schon im Bestand sind."""
+        self.coll_missing.clear()
+        if self.combo_id is None:
+            self.coll_status.setText("")
+            return
+        cov = ydb.combo_coverage_collection(self.repo.db_path, self.combo_id)
+        if cov["total"] == 0:
+            self.coll_status.setText("Noch keine Bausteine festgelegt.")
+            return
+        if cov["covered"] == cov["total"]:
+            self.coll_status.setText(
+                f"✓ Vollständig baubar – alle {cov['total']} Bausteine im Bestand."
+            )
+        else:
+            self.coll_status.setText(
+                f"{cov['covered']} von {cov['total']} Bausteinen im Bestand."
+            )
+        for p in cov["pieces"]:
+            if p["missing"] > 0:
+                self.coll_missing.addItem(
+                    f"{p['missing']}× fehlt – {p['name']}  ({p['have']}/{p['needed']})"
+                )
 
     def _on_select(self, current: QListWidgetItem, _previous=None) -> None:
         if current is None:
@@ -978,6 +1034,7 @@ class ComboView(QWidget):
         self._load_pieces()
         steps = ydb.combo_steps(self.repo.db_path, self.combo_id)
         self.steps_edit.setPlainText("\n".join(s["text"] for s in steps))
+        self._refresh_collection_coverage()
         self.editor.setEnabled(True)
 
     def _clear_editor(self) -> None:
@@ -985,6 +1042,15 @@ class ComboView(QWidget):
         self.arch_edit.clear()
         self.pieces.clear()
         self.steps_edit.clear()
+        self.coll_status.clear()
+        self.coll_missing.clear()
+
+    def _after_piece_change(self) -> None:
+        """Nach Änderung der Bausteine: Liste, Sammlungs-Abgleich und den
+        Baubarkeit-Marker der aktiven Kombo aktualisieren."""
+        self._load_pieces()
+        self._refresh_collection_coverage()
+        self._update_current_label()
 
     def _load_pieces(self) -> None:
         self.pieces.clear()
@@ -1049,7 +1115,7 @@ class ComboView(QWidget):
         ydb.set_combo_card_quantity(
             self.repo.db_path, self.combo_id, card_id, current + delta
         )
-        self._load_pieces()
+        self._after_piece_change()
 
     def _remove_piece(self) -> None:
         item = self.pieces.currentItem()
@@ -1057,7 +1123,7 @@ class ComboView(QWidget):
             return
         card_id = item.data(Qt.ItemDataRole.UserRole)
         ydb.remove_combo_card(self.repo.db_path, self.combo_id, card_id)
-        self._load_pieces()
+        self._after_piece_change()
 
     # -- von aussen (Detailansicht der Suche) -------------------------------
 
@@ -1069,7 +1135,7 @@ class ComboView(QWidget):
             )
             return
         ydb.add_combo_card(self.repo.db_path, self.combo_id, card_id, 1)
-        self._load_pieces()
+        self._after_piece_change()
 
 
 # ---------------------------------------------------------------------------
