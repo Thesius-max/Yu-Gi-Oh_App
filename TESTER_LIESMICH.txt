@@ -38,7 +38,7 @@ FEEDBACK
 ----------------------------------------------------------
 Bitte sammelt Auffaelligkeiten, Fehler und Wuensche (gern als
 einfache Liste) und schickt sie an:
-   teo.munser@gmx.de
+   teo.munser@posteo.de
 
 Hilfreich: Was habt ihr gemacht, was wurde erwartet, was ist passiert.
 
