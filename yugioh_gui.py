@@ -521,7 +521,7 @@ class CollectionView(QWidget):
         rows = ydb.list_collection(self.repo.db_path)
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            name_item = QTableWidgetItem(row["name"])
+            name_item = QTableWidgetItem(row["name_de"] or row["name"])
             # entry_id an der Namenszelle ablegen -- identifiziert die Zeile.
             name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
             self.table.setItem(r, 0, name_item)

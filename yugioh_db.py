@@ -433,12 +433,12 @@ def list_collection(db_path: str) -> list[sqlite3.Row]:
     conn = _connect(db_path)
     try:
         return conn.execute(
-            """SELECT col.entry_id, col.card_id, c.name, c.type,
+            """SELECT col.entry_id, col.card_id, c.name, c.name_de, c.type,
                       col.quantity, col.set_code, col.edition,
                       col.condition, col.language, col.notes
                FROM collection col
                JOIN cards c ON c.id = col.card_id
-               ORDER BY c.name, col.entry_id"""
+               ORDER BY COALESCE(c.name_de, c.name), col.entry_id"""
         ).fetchall()
     finally:
         conn.close()
