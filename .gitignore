@@ -18,6 +18,9 @@ build/
 dist/
 *.spec
 
+# Persönliche Notizen (nicht versioniert)
+Notizen.txt
+
 # Editor / Betriebssystem
 .vscode/
 .idea/
