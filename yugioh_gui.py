@@ -411,7 +411,12 @@ class DetailPanel(QWidget):
         if card["level"] is not None:
             parts.append(f"Stufe {card['level']}")
         if card["atk"] is not None or card["def"] is not None:
-            parts.append(f"ATK {card['atk']} / DEF {card['def']}")
+            atk = card["atk"] if card["atk"] is not None else "—"
+            # Link-Monster haben keine DEF (def ist NULL) -> nicht "None" anzeigen.
+            if card["def"] is not None:
+                parts.append(f"ATK {atk} / DEF {card['def']}")
+            else:
+                parts.append(f"ATK {atk}")
         if card["archetype"]:
             parts.append(f"Archetyp: {card['archetype']}")
         self.stats.setText("  •  ".join(parts))
