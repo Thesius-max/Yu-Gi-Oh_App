@@ -518,7 +518,9 @@ class CollectionView(QWidget):
             self.table.setItem(r, 0, name_item)
 
             spin = QSpinBox()
-            spin.setRange(1, 999)
+            # Obergrenze nie unter die tatsaechliche Menge -- sonst wuerde die
+            # Anzeige stillschweigend auf das Maximum gekappt.
+            spin.setRange(1, max(999, row["quantity"]))
             spin.setValue(row["quantity"])
             # Menge live in die DB schreiben (entry_id ueber Default gebunden).
             spin.valueChanged.connect(
@@ -816,6 +818,8 @@ class DeckView(QWidget):
             ).fetchone()
         finally:
             conn.close()
+        if card is None:
+            return
         natural = ydb.deck_zone_for(card["frame_type"], card["type"])
         ydb.move_deck_card(self.repo.db_path, self.deck_id, cid, "side", natural)
         self.refresh()
