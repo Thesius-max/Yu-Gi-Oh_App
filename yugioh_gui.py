@@ -27,7 +27,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap, QPixmapCache
+from PySide6.QtGui import QColor, QImage, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -116,6 +116,17 @@ _TYPE_DE: dict[str, str] = {
     "XYZ Monster":                     "Xyz-Monster",
     "XYZ Pendulum Effect Monster":     "Xyz-Pendel-Effekt-Monster",
 }
+
+# Kartenklassen für die Gruppierung (Sammlung, Main-Deck).
+_CATEGORY_DE: dict[str, str] = {
+    "monster": "Monster",
+    "spell":   "Zauber",
+    "trap":    "Falle",
+    "other":   "Sonstige",
+}
+_CATEGORY_ORDER = ("monster", "spell", "trap", "other")
+_GROUP_HEADER_BG = QColor("#d8d8d8")  # dezente Kopfzeile in der Sammlungstabelle
+
 
 _RACE_DE: dict[str, str] = {
     # Monster-Typen
@@ -515,33 +526,60 @@ class CollectionView(QWidget):
 
     def refresh(self) -> None:
         if not self.repo.exists():
+            self.table.clearSpans()
             self.table.setRowCount(0)
             self.summary.setText("Keine Datenbank vorhanden.")
             return
         rows = ydb.list_collection(self.repo.db_path)
-        self.table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            name_item = QTableWidgetItem(row["name_de"] or row["name"])
-            # entry_id an der Namenszelle ablegen -- identifiziert die Zeile.
-            name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
-            self.table.setItem(r, 0, name_item)
-
-            spin = QSpinBox()
-            # Obergrenze nie unter die tatsaechliche Menge -- sonst wuerde die
-            # Anzeige stillschweigend auf das Maximum gekappt.
-            spin.setRange(1, max(999, row["quantity"]))
-            spin.setValue(row["quantity"])
-            # Menge live in die DB schreiben (entry_id ueber Default gebunden).
-            spin.valueChanged.connect(
-                lambda value, e=row["entry_id"]: self._on_qty_changed(e, value)
-            )
-            self.table.setCellWidget(r, 1, spin)
-
-            for col, key in enumerate(
-                ("set_code", "edition", "condition", "language", "notes"), start=2
-            ):
-                self.table.setItem(r, col, QTableWidgetItem(row[key] or ""))
+        # Nach Kartenklasse bucketn; Reihenfolge je Gruppe bleibt (Name).
+        buckets: dict[str, list] = {c: [] for c in _CATEGORY_ORDER}
+        for row in rows:
+            buckets[ydb.card_category(row["type"])].append(row)
+        self.table.clearSpans()
+        self.table.setRowCount(0)
+        for cat in _CATEGORY_ORDER:
+            group = buckets[cat]
+            if not group:
+                continue
+            self._add_header_row(_CATEGORY_DE[cat], len(group))
+            for row in group:
+                self._add_data_row(row)
         self._update_summary()
+
+    def _add_header_row(self, label: str, count: int) -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        item = QTableWidgetItem(f"{label}  ({count})")
+        # Kopfzeile: nur aktiviert (nicht auswählbar/editierbar), kein entry_id.
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        font = item.font(); font.setBold(True); item.setFont(font)
+        item.setBackground(_GROUP_HEADER_BG)
+        self.table.setItem(r, 0, item)
+        self.table.setSpan(r, 0, 1, len(self.COLUMNS))
+
+    def _add_data_row(self, row) -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        name_item = QTableWidgetItem(row["name_de"] or row["name"])
+        # entry_id an der Namenszelle ablegen -- identifiziert die Zeile.
+        name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
+        self.table.setItem(r, 0, name_item)
+
+        spin = QSpinBox()
+        # Obergrenze nie unter die tatsaechliche Menge -- sonst wuerde die
+        # Anzeige stillschweigend auf das Maximum gekappt.
+        spin.setRange(1, max(999, row["quantity"]))
+        spin.setValue(row["quantity"])
+        # Menge live in die DB schreiben (entry_id ueber Default gebunden).
+        spin.valueChanged.connect(
+            lambda value, e=row["entry_id"]: self._on_qty_changed(e, value)
+        )
+        self.table.setCellWidget(r, 1, spin)
+
+        for col, key in enumerate(
+            ("set_code", "edition", "condition", "language", "notes"), start=2
+        ):
+            self.table.setItem(r, col, QTableWidgetItem(row[key] or ""))
 
     def _on_qty_changed(self, entry_id: int, value: int) -> None:
         ydb.set_collection_quantity(self.repo.db_path, entry_id, value)
@@ -552,7 +590,9 @@ class CollectionView(QWidget):
         if row < 0:
             return
         item = self.table.item(row, 0)
-        entry_id = item.data(Qt.ItemDataRole.UserRole)
+        entry_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if entry_id is None:
+            return  # Gruppen-Kopfzeile, kein echter Eintrag
         reply = QMessageBox.question(
             self, "Eintrag entfernen",
             f"'{item.text()}' aus der Sammlung entfernen?",
@@ -617,13 +657,37 @@ class ZonePanel(QGroupBox):
 
     def populate(self, rows) -> int:
         self.list.clear()
-        total = 0
-        for r in rows:
-            item = QListWidgetItem(f"{r['quantity']}x  {r['name']}")
-            item.setData(Qt.ItemDataRole.UserRole, r["card_id"])
-            self.list.addItem(item)
-            total += r["quantity"]
+        total = sum(r["quantity"] for r in rows)
+        # Nur das Main-Deck nach Monster/Zauber/Falle gruppieren; Extra ist
+        # ohnehin reines Extra-Monster, Side bleibt eine einfache Liste.
+        if self.zone == "main":
+            buckets: dict[str, list] = {c: [] for c in _CATEGORY_ORDER}
+            for r in rows:
+                buckets[ydb.card_category(r["type"])].append(r)
+            for cat in _CATEGORY_ORDER:
+                group = buckets[cat]
+                if not group:
+                    continue
+                self._add_group_header(
+                    _CATEGORY_DE[cat], sum(r["quantity"] for r in group)
+                )
+                for r in group:
+                    self._add_card_item(r)
+        else:
+            for r in rows:
+                self._add_card_item(r)
         return total
+
+    def _add_card_item(self, r) -> None:
+        item = QListWidgetItem(f"{r['quantity']}x  {r['name']}")
+        item.setData(Qt.ItemDataRole.UserRole, r["card_id"])
+        self.list.addItem(item)
+
+    def _add_group_header(self, label: str, count: int) -> None:
+        item = QListWidgetItem(f"— {label} ({count}) —")
+        item.setFlags(Qt.ItemFlag.NoItemFlags)  # nicht auswählbar (kein card_id)
+        font = item.font(); font.setBold(True); item.setFont(font)
+        self.list.addItem(item)
 
 
 class DeckView(QWidget):

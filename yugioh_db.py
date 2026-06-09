@@ -538,6 +538,19 @@ def deck_zone_for(frame_type: Optional[str], card_type: str = "") -> str:
     return "main"
 
 
+def card_category(card_type: Optional[str]) -> str:
+    """Grobe Kartenklasse fuer die Anzeige/Gruppierung:
+    'monster' | 'spell' | 'trap' | 'other' (z.B. Skill/Token)."""
+    t = card_type or ""
+    if "Spell" in t:
+        return "spell"
+    if "Trap" in t:
+        return "trap"
+    if "Monster" in t:
+        return "monster"
+    return "other"
+
+
 def create_deck(db_path: str, name: str) -> int:
     conn = _connect(db_path)
     try:
