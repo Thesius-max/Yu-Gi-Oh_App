@@ -1,0 +1,45 @@
+==========================================================
+ Yu-Gi-Oh! Sammlung & Deckbuilder  --  Test-Version (MVP)
+==========================================================
+
+Danke fuers Testen! Diese Version ist ein fruehes MVP.
+
+----------------------------------------------------------
+STARTEN (Windows)
+----------------------------------------------------------
+1. Diesen Ordner komplett entpacken (nicht direkt aus der ZIP starten).
+2. Doppelklick auf  YugiohSammlung.exe
+
+Windows zeigt beim ersten Start evtl. eine blaue Warnung
+("Der Computer wurde durch Windows geschuetzt"). Das ist normal,
+weil die App nicht signiert ist:
+   -> "Weitere Informationen"  ->  "Trotzdem ausfuehren"
+
+----------------------------------------------------------
+WAS BEIM ERSTEN START PASSIERT
+----------------------------------------------------------
+- Die Kartendatenbank ist bereits enthalten (offline nutzbar).
+- Kartenbilder werden bei Bedarf einmalig aus dem Internet geladen
+  und lokal gespeichert. Fuer Bilder ist also eine Internetverbindung
+  noetig; ohne Internet laeuft alles ausser den Bildern.
+
+----------------------------------------------------------
+WO LIEGEN MEINE DATEN
+----------------------------------------------------------
+Sammlung, Decks und Kombos werden hier gespeichert:
+   %LOCALAPPDATA%\YugiohSammlung\
+   (z.B. C:\Users\<DeinName>\AppData\Local\YugiohSammlung\)
+
+Diese Daten bleiben bei einem Update der App erhalten. Zum komplett
+"frischen" Zuruecksetzen einfach diesen Ordner loeschen.
+
+----------------------------------------------------------
+FEEDBACK
+----------------------------------------------------------
+Bitte sammelt Auffaelligkeiten, Fehler und Wuensche (gern als
+einfache Liste) und schickt sie an:
+   teo.munser@gmx.de
+
+Hilfreich: Was habt ihr gemacht, was wurde erwartet, was ist passiert.
+
+Viel Spass!
