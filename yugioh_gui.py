@@ -27,7 +27,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -426,14 +426,26 @@ class DetailPanel(QWidget):
         self.owned.setText(f"im Bestand: {self.repo.owned_count(card['id'])}")
         self._set_enabled(True)
 
+    @staticmethod
+    def _scaled(pixmap: QPixmap) -> QPixmap:
+        return pixmap.scaled(
+            220, 320,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
     def _load_image(self, card_id: int) -> None:
+        # Bereits skalierte Pixmaps im Prozess-Cache halten -- erneutes Anwählen
+        # einer Karte erspart so das volle JPEG-Dekodieren und Skalieren.
+        key = f"card:{card_id}"
+        cached = QPixmapCache.find(key)
+        if cached is not None and not cached.isNull():
+            self.image.setPixmap(cached)
+            return
         path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
         if os.path.exists(path):
-            pix = QPixmap(path).scaled(
-                220, 320,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            pix = self._scaled(QPixmap(path))
+            QPixmapCache.insert(key, pix)
             self.image.setPixmap(pix)
             return
         self.image.setText("Lade …")
@@ -442,13 +454,10 @@ class DetailPanel(QWidget):
         )
 
     def _on_image_loaded(self, card_id: int, img: QImage) -> None:
+        pix = self._scaled(QPixmap.fromImage(img))
+        QPixmapCache.insert(f"card:{card_id}", pix)
         if card_id != self.current_id:
             return
-        pix = QPixmap.fromImage(img).scaled(
-            220, 320,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
         self.image.setPixmap(pix)
 
     def _on_image_failed(self, card_id: int) -> None:
