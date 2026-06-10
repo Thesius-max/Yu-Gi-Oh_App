@@ -744,23 +744,40 @@ class DeckView(QWidget):
 
         combo_box = QGroupBox("Kombo-Hilfe")
         cv = QVBoxLayout(combo_box)
-        self.consistency = QLabel("")
-        self.consistency.setWordWrap(True)
-        cv.addWidget(self.consistency)
-        cv.addWidget(QLabel("Kombos nach Abdeckung:"))
+        self.helper_tabs = QTabWidget()
+        cv.addWidget(self.helper_tabs)
+
+        kombos_tab = QWidget()
+        kv = QVBoxLayout(kombos_tab)
+        kv.addWidget(QLabel("Kombos nach Abdeckung:"))
         self.combo_list = QListWidget()
         self.combo_list.currentItemChanged.connect(self._on_combo_selected)
-        cv.addWidget(self.combo_list, stretch=1)
-        cv.addWidget(QLabel("Bausteine (vorhanden / benötigt):"))
+        kv.addWidget(self.combo_list, stretch=1)
+        kv.addWidget(QLabel("Bausteine (vorhanden / benötigt):"))
         self.combo_pieces = QListWidget()
-        cv.addWidget(self.combo_pieces, stretch=1)
-        cv.addWidget(QLabel("Schritte:"))
+        kv.addWidget(self.combo_pieces, stretch=1)
+        kv.addWidget(QLabel("Schritte:"))
         self.combo_steps = QListWidget()
         self.combo_steps.setWordWrap(True)
-        cv.addWidget(self.combo_steps, stretch=1)
+        kv.addWidget(self.combo_steps, stretch=1)
         self.add_missing_btn = QPushButton("Fehlende Bausteine ins Deck")
         self.add_missing_btn.clicked.connect(self._add_missing)
-        cv.addWidget(self.add_missing_btn)
+        kv.addWidget(self.add_missing_btn)
+        self.helper_tabs.addTab(kombos_tab, "Kombos")
+
+        plan_tab = QWidget()
+        pv = QVBoxLayout(plan_tab)
+        self.consistency = QLabel("")
+        self.consistency.setWordWrap(True)
+        pv.addWidget(self.consistency)
+        pv.addWidget(QLabel("Rollen im Deck (Main + Extra):"))
+        self.role_summary = QListWidget()
+        pv.addWidget(self.role_summary, stretch=1)
+        pv.addWidget(QLabel("Linien zum Boss (Doppelklick öffnet die Kombo):"))
+        self.boss_lines = QListWidget()
+        self.boss_lines.itemDoubleClicked.connect(self._open_line)
+        pv.addWidget(self.boss_lines, stretch=1)
+        self.helper_tabs.addTab(plan_tab, "Fahrplan")
 
         main_split = QSplitter(Qt.Orientation.Horizontal)
         main_split.addWidget(zones_widget)
@@ -824,6 +841,7 @@ class DeckView(QWidget):
                 "Kein Deck ausgewählt. Lege über 'Neues Deck' eines an."
             )
             self._refresh_consistency()
+            self._refresh_plan()
             self._refresh_combos()
             return
         for zone, panel in self.panels.items():
@@ -834,6 +852,7 @@ class DeckView(QWidget):
         parts = [("\u2713 " if ok else "\u2717 ") + txt for ok, txt in checks]
         self.status.setText("     ".join(parts))
         self._refresh_consistency()
+        self._refresh_plan()
         self._refresh_combos()
 
     # -- Kombo-Hilfe --------------------------------------------------------
@@ -866,6 +885,59 @@ class DeckView(QWidget):
             line += f"  ·  Brick {_pct(p['brick'])}"
             lines.append(line)
         self.consistency.setText("\n".join(lines))
+
+    @staticmethod
+    def _add_plan_header(lst: QListWidget, text: str) -> None:
+        item = QListWidgetItem(f"— {text} —")
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        font = item.font(); font.setBold(True); item.setFont(font)
+        lst.addItem(item)
+
+    @staticmethod
+    def _add_plan_note(lst: QListWidget, text: str) -> None:
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        lst.addItem(item)
+
+    def _refresh_plan(self) -> None:
+        """Fahrplan: Rollen-Bestand des Decks und Linien je Bossmonster."""
+        self.role_summary.clear()
+        self.boss_lines.clear()
+        if self.deck_id is None or not self.repo.exists():
+            return
+        summary = ydb.deck_role_summary(self.repo.db_path, self.deck_id)
+        if not summary:
+            self._add_plan_note(
+                self.role_summary,
+                "Keine Rollen im Deck — Bausteine im Tab 'Kombos' einstufen.",
+            )
+        for role in ydb.COMBO_ROLES:
+            cards = summary.get(role)
+            if not cards:
+                continue
+            total = sum(c["copies"] for c in cards)
+            self._add_plan_header(self.role_summary, f"{_ROLE_DE[role]} ({total})")
+            for c in cards:
+                self.role_summary.addItem(f"{c['copies']}x  {c['name']}")
+        groups = ydb.deck_boss_lines(self.repo.db_path, self.deck_id)
+        if not groups:
+            self._add_plan_note(self.boss_lines, "Noch keine Kombos angelegt.")
+        for g in groups:
+            self._add_plan_header(self.boss_lines, g["boss_name"] or "Ohne Boss")
+            for line in g["lines"]:
+                cov = (f"{line['covered']}/{line['total']}"
+                       if line["total"] else "leer")
+                item = QListWidgetItem(f"{cov}  {line['name']}")
+                item.setData(Qt.ItemDataRole.UserRole, line["combo_id"])
+                self.boss_lines.addItem(item)
+
+    def _open_line(self, item: QListWidgetItem) -> None:
+        """Doppelklick auf eine Linie: zur Kombo im Kombos-Reiter springen."""
+        combo_id = item.data(Qt.ItemDataRole.UserRole)
+        if combo_id is None:
+            return
+        self.helper_tabs.setCurrentIndex(0)
+        self._select_combo(combo_id)
 
     def _refresh_combos(self) -> None:
         self.combo_list.clear()

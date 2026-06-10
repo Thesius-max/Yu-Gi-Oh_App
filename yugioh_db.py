@@ -1122,6 +1122,66 @@ def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
     return out
 
 
+def deck_role_summary(db_path: str, deck_id: int) -> dict[str, list[dict]]:
+    """Karten je Rolle im Deck (Main + Extra, wie combo_coverage; das Side
+    Deck bleibt aussen vor). Eine Karte erscheint je Rolle einmal, auch wenn
+    mehrere Kombos ihr dieselbe Rolle geben; verschiedene Rollen aus
+    verschiedenen Kombos sind moeglich.
+    Rueckgabe: {rolle: [{'card_id', 'name', 'copies'}, ...]}."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT DISTINCT cc.role, dc.card_id,
+                      COALESCE(c.name_de, c.name) AS name, dc.quantity
+               FROM deck_cards dc
+               JOIN combo_cards cc ON cc.card_id = dc.card_id
+               JOIN cards c ON c.id = dc.card_id
+               WHERE dc.deck_id = ? AND dc.zone IN ('main', 'extra')
+                 AND cc.role IS NOT NULL
+               ORDER BY name""",
+            (deck_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["role"], []).append({
+            "card_id": r["card_id"], "name": r["name"],
+            "copies": int(r["quantity"]),
+        })
+    return out
+
+
+def deck_boss_lines(db_path: str, deck_id: int) -> list[dict]:
+    """Linien (Kombos) gruppiert nach Bossmonster; innerhalb der Gruppen
+    bleibt die Abdeckungs-Sortierung aus combos_for_deck erhalten, ebenso
+    zwischen den Gruppen (beste Linie zuerst). Kombos ohne Boss bilden die
+    letzte Gruppe (boss_card_id None).
+    Rueckgabe: [{'boss_card_id', 'boss_name', 'lines': [wie combos_for_deck]}]."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT cb.combo_id, cb.boss_card_id,
+                      COALESCE(b.name_de, b.name) AS boss_name
+               FROM combos cb LEFT JOIN cards b ON b.id = cb.boss_card_id"""
+        ).fetchall()
+    finally:
+        conn.close()
+    boss_of = {r["combo_id"]: (r["boss_card_id"], r["boss_name"]) for r in rows}
+    groups: dict = {}
+    for line in combos_for_deck(db_path, deck_id):
+        boss_id, boss_name = boss_of.get(line["combo_id"], (None, None))
+        g = groups.setdefault(
+            boss_id,
+            {"boss_card_id": boss_id, "boss_name": boss_name, "lines": []},
+        )
+        g["lines"].append(line)
+    out = [g for k, g in groups.items() if k is not None]
+    if None in groups:
+        out.append(groups[None])
+    return out
+
+
 def combo_coverage_collection(db_path: str, combo_id: int) -> dict:
     """Abgleich einer Kombo mit der eigenen Sammlung (collection).
     Gleiche Struktur wie combo_coverage, aber 'have' zaehlt den Bestand --
