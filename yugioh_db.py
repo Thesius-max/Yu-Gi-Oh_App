@@ -22,6 +22,7 @@ anzeigen will, laedt sie einmal herunter und legt sie lokal ab
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -1166,6 +1167,73 @@ def combos_for_collection(db_path: str) -> list[dict]:
         })
     out.sort(key=lambda x: (-x["coverage"], x["name"]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Konsistenz-Mathematik (hypergeometrisch, exakt, reine Standardbibliothek)
+# ---------------------------------------------------------------------------
+
+def hypergeom_at_least(
+    population: int, successes: int, draws: int, min_hits: int = 1
+) -> float:
+    """Wahrscheinlichkeit, beim Ziehen ohne Zuruecklegen mindestens
+    'min_hits' Erfolge zu ziehen. Unsinnige Eingaben werden gekappt
+    (successes/draws auf population), statt zu raten oder zu werfen."""
+    population = max(0, population)
+    successes = max(0, min(successes, population))
+    draws = max(0, min(draws, population))
+    if min_hits <= 0:
+        return 1.0
+    if successes == 0 or draws == 0:
+        return 0.0
+    total = math.comb(population, draws)
+    misses = sum(
+        math.comb(successes, k) * math.comb(population - successes, draws - k)
+        for k in range(min(min_hits, draws + 1))
+    )
+    return 1.0 - misses / total
+
+
+def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
+    """Kopien je Rolle im MAIN Deck (nur daraus wird gezogen).
+    Eine Karte zaehlt je Rolle einmal, auch wenn mehrere Kombos ihr dieselbe
+    Rolle geben; traegt sie in verschiedenen Kombos verschiedene Rollen,
+    zaehlt sie in jeder davon."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT role, SUM(quantity) AS n FROM (
+                   SELECT DISTINCT dc.card_id, cc.role, dc.quantity
+                   FROM deck_cards dc
+                   JOIN combo_cards cc ON cc.card_id = dc.card_id
+                   WHERE dc.deck_id = ? AND dc.zone = 'main'
+                     AND cc.role IS NOT NULL
+               ) GROUP BY role""",
+            (deck_id,),
+        ).fetchall()
+        return {r["role"]: int(r["n"]) for r in rows}
+    finally:
+        conn.close()
+
+
+def deck_consistency(
+    db_path: str, deck_id: int, hand_sizes: Iterable[int] = (5, 6)
+) -> dict:
+    """Konsistenz-Kennzahlen der Starthand (5 = First, 6 = Second).
+    'brick' ist als Hand ohne Starter definiert.
+    Rueckgabe: {'deck_size', 'roles': {rolle: kopien},
+    'hands': {handgroesse: {'starter', 'handtrap', 'brick'}}}."""
+    size = deck_counts(db_path, deck_id)["main"]
+    roles = deck_role_copies(db_path, deck_id)
+    hands = {}
+    for hand in hand_sizes:
+        p_starter = hypergeom_at_least(size, roles.get("starter", 0), hand)
+        hands[hand] = {
+            "starter": p_starter,
+            "handtrap": hypergeom_at_least(size, roles.get("handtrap", 0), hand),
+            "brick": 1.0 - p_starter,
+        }
+    return {"deck_size": size, "roles": roles, "hands": hands}
 
 
 # ---------------------------------------------------------------------------

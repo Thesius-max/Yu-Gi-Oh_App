@@ -139,6 +139,11 @@ _ROLE_DE: dict[str, str] = {
 _PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
 
 
+def _pct(p: float) -> str:
+    """Wahrscheinlichkeit als deutschen Prozentwert formatieren (84,2 %)."""
+    return f"{100 * p:.1f}".replace(".", ",") + " %"
+
+
 _RACE_DE: dict[str, str] = {
     # Monster-Typen
     "Aqua":         "Aqua",
@@ -739,6 +744,9 @@ class DeckView(QWidget):
 
         combo_box = QGroupBox("Kombo-Hilfe")
         cv = QVBoxLayout(combo_box)
+        self.consistency = QLabel("")
+        self.consistency.setWordWrap(True)
+        cv.addWidget(self.consistency)
         cv.addWidget(QLabel("Kombos nach Abdeckung:"))
         self.combo_list = QListWidget()
         self.combo_list.currentItemChanged.connect(self._on_combo_selected)
@@ -815,6 +823,7 @@ class DeckView(QWidget):
             self.status.setText(
                 "Kein Deck ausgewählt. Lege über 'Neues Deck' eines an."
             )
+            self._refresh_consistency()
             self._refresh_combos()
             return
         for zone, panel in self.panels.items():
@@ -824,9 +833,39 @@ class DeckView(QWidget):
         checks = ydb.validate_deck(self.repo.db_path, self.deck_id)
         parts = [("\u2713 " if ok else "\u2717 ") + txt for ok, txt in checks]
         self.status.setText("     ".join(parts))
+        self._refresh_consistency()
         self._refresh_combos()
 
     # -- Kombo-Hilfe --------------------------------------------------------
+
+    def _refresh_consistency(self) -> None:
+        """Zieh-Wahrscheinlichkeiten der Starthand (aus den Kombo-Rollen)."""
+        if self.deck_id is None or not self.repo.exists():
+            self.consistency.setText("")
+            return
+        stats = ydb.deck_consistency(self.repo.db_path, self.deck_id)
+        if stats["deck_size"] == 0:
+            self.consistency.setText("")
+            return
+        roles = stats["roles"]
+        if not roles.get("starter"):
+            self.consistency.setText(
+                "Konsistenz: keine Starter im Main Deck — Rollen der "
+                "Kombo-Bausteine im Tab 'Kombos' vergeben."
+            )
+            return
+        lines = [
+            "Kopien im Main: " + "  ·  ".join(
+                f"{_ROLE_DE[r]} {roles[r]}" for r in ydb.COMBO_ROLES if roles.get(r)
+            )
+        ]
+        for hand, p in stats["hands"].items():
+            line = f"Starthand {hand}: ≥1 Starter {_pct(p['starter'])}"
+            if roles.get("handtrap"):
+                line += f"  ·  ≥1 Handtrap {_pct(p['handtrap'])}"
+            line += f"  ·  Brick {_pct(p['brick'])}"
+            lines.append(line)
+        self.consistency.setText("\n".join(lines))
 
     def _refresh_combos(self) -> None:
         self.combo_list.clear()
