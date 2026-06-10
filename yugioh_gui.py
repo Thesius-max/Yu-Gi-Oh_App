@@ -280,6 +280,15 @@ class CardRepository:
         finally:
             conn.close()
 
+    def get_card(self, card_id: int):
+        conn = ydb._connect(self.db_path)
+        try:
+            return conn.execute(
+                "SELECT * FROM cards WHERE id = ?", (card_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Karten-Suchdialog (für das Hinzufügen aus dem Deck-Tab)
@@ -353,6 +362,12 @@ class DetailPanel(QWidget):
         self.name = QLabel("")
         self.name.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.name.setWordWrap(True)
+        # Eigene Uebersetzung pflegen -- fuer Karten, denen die API keinen
+        # deutschen Namen/Text liefert.
+        self.edit_trans_btn = QPushButton("✎ DE")
+        self.edit_trans_btn.setToolTip("Deutsche Übersetzung bearbeiten")
+        self.edit_trans_btn.setFixedWidth(48)
+        self.edit_trans_btn.clicked.connect(self._edit_translation)
 
         self.stats = QLabel("")
         self.stats.setWordWrap(True)
@@ -396,7 +411,12 @@ class DetailPanel(QWidget):
         self.add_to_combo_callback = None
 
         layout.addWidget(self.image)
-        layout.addWidget(self.name)
+        name_row = QHBoxLayout()
+        name_row.addWidget(self.name, stretch=1)
+        name_row.addWidget(
+            self.edit_trans_btn, alignment=Qt.AlignmentFlag.AlignTop
+        )
+        layout.addLayout(name_row)
         layout.addWidget(self.stats)
         layout.addWidget(self.text, stretch=1)
         layout.addWidget(coll_box)
@@ -410,6 +430,50 @@ class DetailPanel(QWidget):
         self.add_deck_btn.setEnabled(on)
         self.add_side_btn.setEnabled(on)
         self.add_combo_btn.setEnabled(on)
+        self.edit_trans_btn.setEnabled(on)
+
+    def _edit_translation(self) -> None:
+        """Eigene DE-Uebersetzung erfassen/aendern (Override; ueberlebt
+        Karten-Updates). Leere Felder = kein Override fuer dieses Feld."""
+        if self.current_id is None:
+            return
+        card = self.repo.get_card(self.current_id)
+        if card is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Deutsche Übersetzung bearbeiten")
+        dlg.resize(420, 360)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel(f"Karte: {card['name']}"))
+        form = QFormLayout()
+        name_edit = QLineEdit(card["name_de"] or "")
+        form.addRow("Name (DE)", name_edit)
+        v.addLayout(form)
+        v.addWidget(QLabel("Kartentext (DE):"))
+        desc_edit = QTextEdit()
+        desc_edit.setPlainText(card["desc_de"] or "")
+        v.addWidget(desc_edit, stretch=1)
+        hint = QLabel("Leere Felder lassen die API-Daten unangetastet.")
+        hint.setStyleSheet("color: #888;")
+        v.addWidget(hint)
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Speichern")
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        v.addLayout(btn_row)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        ydb.set_card_translation(
+            self.repo.db_path, self.current_id,
+            name_de=name_edit.text(), desc_de=desc_edit.toPlainText(),
+        )
+        updated = self.repo.get_card(self.current_id)
+        if updated is not None:
+            self.show_card(updated)
 
     def _add_to_combo(self) -> None:
         if self.current_id is None or self.add_to_combo_callback is None:
@@ -524,6 +588,28 @@ class CollectionView(QWidget):
         toolbar.addWidget(refresh_btn)
         toolbar.addWidget(self.remove_btn)
 
+        # Filterleiste: Namenssuche + Dropdowns. Die Dropdowns zeigen nur
+        # Werte, die im Bestand tatsaechlich vorkommen.
+        filters = QHBoxLayout()
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText("Name filtern …")
+        self.filter_text.textChanged.connect(self.refresh)
+        self.filter_cat = QComboBox()
+        self.filter_attr = QComboBox()
+        self.filter_arch = QComboBox()
+        for cb in (self.filter_cat, self.filter_attr, self.filter_arch):
+            cb.addItem("(alle)", None)
+            cb.currentIndexChanged.connect(self.refresh)
+        for cat in _CATEGORY_ORDER:
+            self.filter_cat.addItem(_CATEGORY_DE[cat], cat)
+        filters.addWidget(self.filter_text, stretch=1)
+        filters.addWidget(QLabel("Klasse:"))
+        filters.addWidget(self.filter_cat)
+        filters.addWidget(QLabel("Attribut:"))
+        filters.addWidget(self.filter_attr)
+        filters.addWidget(QLabel("Archetyp:"))
+        filters.addWidget(self.filter_arch)
+
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setSelectionBehavior(
@@ -538,8 +624,26 @@ class CollectionView(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
 
         layout.addLayout(toolbar)
+        layout.addLayout(filters)
         layout.addWidget(self.table)
         self.refresh()
+
+    def _reload_filter_values(self) -> None:
+        """Attribut-/Archetyp-Dropdowns aus dem Bestand neu befuellen;
+        die aktuelle Auswahl bleibt erhalten."""
+        for cb, column, trans in (
+            (self.filter_attr, "attribute", _ATTR_DE),
+            (self.filter_arch, "archetype", {}),
+        ):
+            keep = cb.currentData()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("(alle)", None)
+            for val in ydb.collection_distinct(self.repo.db_path, column):
+                cb.addItem(trans.get(val, val), val)
+            idx = cb.findData(keep)
+            cb.setCurrentIndex(max(idx, 0))
+            cb.blockSignals(False)
 
     def refresh(self) -> None:
         if not self.repo.exists():
@@ -547,7 +651,14 @@ class CollectionView(QWidget):
             self.table.setRowCount(0)
             self.summary.setText("Keine Datenbank vorhanden.")
             return
-        rows = ydb.list_collection(self.repo.db_path)
+        self._reload_filter_values()
+        rows = ydb.list_collection(
+            self.repo.db_path,
+            text=self.filter_text.text(),
+            category=self.filter_cat.currentData(),
+            attribute=self.filter_attr.currentData(),
+            archetype=self.filter_arch.currentData(),
+        )
         # Nach Kartenklasse bucketn; Reihenfolge je Gruppe bleibt (Name).
         buckets: dict[str, list] = {c: [] for c in _CATEGORY_ORDER}
         for row in rows:
@@ -564,7 +675,7 @@ class CollectionView(QWidget):
             )
             for row in group:
                 self._add_data_row(row)
-        self._update_summary()
+        self._update_summary(rows)
 
     def _add_header_row(self, label: str, count: int) -> None:
         r = self.table.rowCount()
@@ -621,12 +732,24 @@ class CollectionView(QWidget):
             ydb.remove_collection_entry(self.repo.db_path, entry_id)
             self.refresh()
 
-    def _update_summary(self) -> None:
+    def _filters_active(self) -> bool:
+        return bool(
+            self.filter_text.text().strip()
+            or self.filter_cat.currentData()
+            or self.filter_attr.currentData()
+            or self.filter_arch.currentData()
+        )
+
+    def _update_summary(self, filtered_rows=None) -> None:
         entries, unique, total = ydb.collection_stats(self.repo.db_path)
-        self.summary.setText(
+        text = (
             f"{entries} Einträge  ·  {unique} verschiedene Karten  ·  "
             f"{total} Karten gesamt"
         )
+        if filtered_rows is not None and self._filters_active():
+            shown = sum(r["quantity"] for r in filtered_rows)
+            text += f"  ·  Filter: {len(filtered_rows)} Einträge ({shown} Karten)"
+        self.summary.setText(text)
 
 
 # ---------------------------------------------------------------------------
@@ -1875,13 +1998,7 @@ class MainWindow(QMainWindow):
         if current is None:
             return
         card_id = current.data(Qt.ItemDataRole.UserRole)
-        conn = ydb._connect(self.repo.db_path)
-        try:
-            card = conn.execute(
-                "SELECT * FROM cards WHERE id = ?", (card_id,)
-            ).fetchone()
-        finally:
-            conn.close()
+        card = self.repo.get_card(card_id)
         if card:
             self.detail.show_card(card)
 

@@ -181,6 +181,15 @@ CREATE TABLE IF NOT EXISTS collection (
 );
 CREATE INDEX IF NOT EXISTS idx_collection_card ON collection(card_id);
 
+-- Eigene DE-Uebersetzungen fuer Karten, bei denen die API keine (oder eine
+-- falsche) liefert. Benutzerdaten: build_database wendet sie nach jedem
+-- Karten-UPSERT wieder auf cards an, damit sie Updates ueberleben.
+CREATE TABLE IF NOT EXISTS card_translations (
+    card_id  INTEGER PRIMARY KEY REFERENCES cards(id),
+    name_de  TEXT,
+    desc_de  TEXT
+);
+
 -- Decks und ihre Karten (Main/Extra/Side).
 CREATE TABLE IF NOT EXISTS decks (
     deck_id  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +363,17 @@ def build_database(
                     ),
                 )
 
+        # Eigene Uebersetzungen wieder anwenden -- der UPSERT oben hat
+        # name_de/desc_de mit den API-Werten ueberschrieben.
+        conn.execute(
+            """UPDATE cards SET
+                 name_de = COALESCE((SELECT t.name_de FROM card_translations t
+                                     WHERE t.card_id = cards.id), name_de),
+                 desc_de = COALESCE((SELECT t.desc_de FROM card_translations t
+                                     WHERE t.card_id = cards.id), desc_de)
+               WHERE id IN (SELECT card_id FROM card_translations)"""
+        )
+
         # FTS-Index aus den Stammdaten neu aufbauen (deutsch + englisch).
         conn.execute(
             "INSERT INTO cards_fts (rowid, name, description, name_de, desc_de) "
@@ -491,18 +511,116 @@ def add_to_collection(
         conn.close()
 
 
-def list_collection(db_path: str) -> list[sqlite3.Row]:
-    """Alle Bestandseintraege mit Kartenname -- ein Eintrag (Druck) pro Zeile."""
+def list_collection(
+    db_path: str,
+    text: Optional[str] = None,
+    category: Optional[str] = None,
+    attribute: Optional[str] = None,
+    archetype: Optional[str] = None,
+) -> list[sqlite3.Row]:
+    """Bestandseintraege mit Kartenname -- ein Eintrag (Druck) pro Zeile.
+    Optional gefiltert: text (Namenssuche de/en), category (Wert von
+    card_category), attribute, archetype."""
+    sql = """SELECT col.entry_id, col.card_id, c.name, c.name_de, c.type,
+                    c.attribute, c.archetype,
+                    col.quantity, col.set_code, col.edition,
+                    col.condition, col.language, col.notes
+             FROM collection col
+             JOIN cards c ON c.id = col.card_id"""
+    where, args = [], []
+    if text and text.strip():
+        like = f"%{text.strip()}%"
+        where.append("(c.name LIKE ? OR c.name_de LIKE ?)")
+        args += [like, like]
+    if attribute:
+        where.append("c.attribute = ?")
+        args.append(attribute)
+    if archetype:
+        where.append("c.archetype = ?")
+        args.append(archetype)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY COALESCE(c.name_de, c.name), col.entry_id"
     conn = _connect(db_path)
     try:
-        return conn.execute(
-            """SELECT col.entry_id, col.card_id, c.name, c.name_de, c.type,
-                      col.quantity, col.set_code, col.edition,
-                      col.condition, col.language, col.notes
-               FROM collection col
-               JOIN cards c ON c.id = col.card_id
-               ORDER BY COALESCE(c.name_de, c.name), col.entry_id"""
+        rows = conn.execute(sql, args).fetchall()
+    finally:
+        conn.close()
+    # Kartenklasse in Python filtern -- exakt dieselbe Logik wie die
+    # Gruppierung (card_category), keine zweite LIKE-Naeherung in SQL.
+    if category:
+        rows = [r for r in rows if card_category(r["type"]) == category]
+    return rows
+
+
+def collection_distinct(db_path: str, column: str) -> list[str]:
+    """Vorhandene Werte einer Kartenspalte im eigenen Bestand (fuer Filter)."""
+    if column not in ("attribute", "archetype", "race", "type"):
+        raise ValueError(f"Unerwartete Spalte: {column}")
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            f"""SELECT DISTINCT c.{column} AS v
+                FROM collection col JOIN cards c ON c.id = col.card_id
+                WHERE c.{column} IS NOT NULL ORDER BY v"""
         ).fetchall()
+        return [r["v"] for r in rows]
+    finally:
+        conn.close()
+
+
+def set_card_translation(
+    db_path: str, card_id: int,
+    name_de: Optional[str] = None, desc_de: Optional[str] = None,
+) -> None:
+    """Eigene DE-Uebersetzung (Override) fuer eine Karte setzen.
+
+    Leere Werte bedeuten 'kein Override fuer dieses Feld'; sind beide leer,
+    wird der Override entfernt (die Karte faellt beim naechsten Daten-Update
+    auf die API-Werte zurueck). Schreibt direkt nach cards durch und haelt
+    den FTS-Index aktuell, damit die Suche den Namen sofort findet."""
+    name_de = (name_de or "").strip() or None
+    desc_de = (desc_de or "").strip() or None
+    conn = _connect(db_path)
+    try:
+        old = conn.execute(
+            "SELECT name, description, name_de, desc_de FROM cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        if old is None:
+            raise ValueError(f"Karte {card_id} nicht gefunden.")
+        if name_de is None and desc_de is None:
+            conn.execute(
+                "DELETE FROM card_translations WHERE card_id = ?", (card_id,)
+            )
+            conn.commit()
+            return
+        conn.execute(
+            """INSERT INTO card_translations (card_id, name_de, desc_de)
+               VALUES (?,?,?)
+               ON CONFLICT(card_id) DO UPDATE SET
+                   name_de = excluded.name_de, desc_de = excluded.desc_de""",
+            (card_id, name_de, desc_de),
+        )
+        # FTS (external content) verlangt beim Loeschen die ALTEN Werte.
+        conn.execute(
+            "INSERT INTO cards_fts (cards_fts, rowid, name, description, "
+            "name_de, desc_de) VALUES ('delete', ?,?,?,?,?)",
+            (card_id, old["name"], old["description"],
+             old["name_de"], old["desc_de"]),
+        )
+        conn.execute(
+            "UPDATE cards SET name_de = COALESCE(?, name_de), "
+            "desc_de = COALESCE(?, desc_de) WHERE id = ?",
+            (name_de, desc_de, card_id),
+        )
+        conn.execute(
+            "INSERT INTO cards_fts (rowid, name, description, name_de, desc_de) "
+            "SELECT id, name, description, name_de, desc_de FROM cards "
+            "WHERE id = ?",
+            (card_id,),
+        )
+        conn.commit()
     finally:
         conn.close()
 
