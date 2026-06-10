@@ -28,11 +28,11 @@ import shutil
 import sys
 
 from PySide6.QtCore import (
-    Qt, QMarginsF, QObject, QRunnable, QThreadPool, QTimer, Signal,
+    Qt, QMarginsF, QObject, QRunnable, QThreadPool, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFont, QImage, QPageLayout, QPageSize, QPdfWriter, QPixmap,
-    QPixmapCache, QTextDocument,
+    QColor, QDesktopServices, QFont, QImage, QPageLayout, QPageSize,
+    QPdfWriter, QPixmap, QPixmapCache, QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
@@ -2087,12 +2087,24 @@ class ComboView(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, db_path: str = ydb.DEFAULT_DB):
         super().__init__()
-        self.setWindowTitle("Yu-Gi-Oh -- Sammlung & Suche")
+        self.setWindowTitle(
+            f"Yu-Gi-Oh -- Sammlung & Suche  ·  v{ydb.APP_VERSION}"
+        )
         self.resize(1100, 700)
         self.repo = CardRepository(db_path)
         # Gepackter Erststart: mitgelieferte Seed-DB in den Nutzerordner kopieren.
         ydb.ensure_user_db(db_path)
         if self.repo.exists():
+            # Erster Start einer neuen App-Version: Benutzerdaten sichern,
+            # BEVOR ensure_schema die DB migriert.
+            try:
+                ydb.migration_backup(db_path)
+            except OSError as exc:
+                QMessageBox.warning(
+                    self, "Sicherung fehlgeschlagen",
+                    f"Versions-Sicherung der Datenbank fehlgeschlagen ({exc}).\n"
+                    "Die App startet trotzdem.",
+                )
             ydb.ensure_schema(db_path)  # ggf. fehlende Tabellen nachruesten
         self._loading = True  # unterdrueckt Suche waehrend Initialisierung
         self._search_timer = QTimer(self)
@@ -2145,6 +2157,9 @@ class MainWindow(QMainWindow):
             )
         self._loading = False
         self.search()
+        # Stiller Hinweis auf neue App-Versionen, kurz nach dem Start (ein
+        # Mini-Request; offline/Fehler bleibt einfach unsichtbar).
+        QTimer.singleShot(2000, lambda: self._check_app_version(manual=False))
 
     def _build_filter_panel(self) -> QWidget:
         panel = QWidget()
@@ -2277,6 +2292,70 @@ class MainWindow(QMainWindow):
         self._check_action.triggered.connect(self._check_for_update)
         self._update_action = menu.addAction("Kartendaten aktualisieren…")
         self._update_action.triggered.connect(self._start_update)
+        menu.addSeparator()
+        self._app_check_action = menu.addAction("Auf neue App-Version prüfen")
+        self._app_check_action.triggered.connect(
+            lambda: self._check_app_version(manual=True)
+        )
+
+    # -- App-Update-Hinweis (GitHub-Releases) ---------------------------------
+
+    def _check_app_version(self, manual: bool) -> None:
+        """Neueste Version bei GitHub abfragen (im Hintergrund). manual=True
+        meldet auch 'aktuell' und Fehler; der Start-Check bleibt still."""
+        self._app_check_action.setEnabled(False)
+        self._app_check_signals = _DbTaskSignals()
+        self._app_check_signals.done.connect(
+            lambda info: self._on_app_check_done(info, manual)
+        )
+        self._app_check_signals.failed.connect(
+            lambda msg: self._on_app_check_failed(msg, manual)
+        )
+        QThreadPool.globalInstance().start(
+            _DbTask(ydb.check_app_update, self._app_check_signals)
+        )
+
+    def _on_app_check_failed(self, msg: str, manual: bool) -> None:
+        self._app_check_action.setEnabled(True)
+        if manual:
+            QMessageBox.warning(
+                self, "Auf neue App-Version prüfen",
+                f"Keine Antwort von GitHub ({msg}).\n"
+                "Besteht eine Internetverbindung?",
+            )
+
+    def _on_app_check_done(self, info, manual: bool) -> None:
+        self._app_check_action.setEnabled(True)
+        if info is None:
+            if manual:
+                QMessageBox.information(
+                    self, "Auf neue App-Version prüfen",
+                    f"Du nutzt die aktuelle Version (v{ydb.APP_VERSION}).",
+                )
+            return
+        notes = info["notes"]
+        if len(notes) > 600:
+            notes = notes[:600] + "…"
+        text = (
+            f"Version {info['version']} ist verfügbar "
+            f"(installiert: {ydb.APP_VERSION}).\n\n"
+            "Deine Daten (Sammlung, Decks, Kombos) bleiben beim Update "
+            "erhalten — einfach den alten App-Ordner durch den neuen "
+            "ersetzen."
+        )
+        if notes:
+            text += f"\n\nÄnderungen:\n{notes}"
+        box = QMessageBox(
+            QMessageBox.Icon.Information, "Neue App-Version", text,
+            parent=self,
+        )
+        open_btn = box.addButton(
+            "Download-Seite öffnen", QMessageBox.ButtonRole.AcceptRole
+        )
+        box.addButton("Später", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            QDesktopServices.openUrl(QUrl(info["url"]))
 
     def _set_data_actions_enabled(self, on: bool) -> None:
         self._check_action.setEnabled(on)

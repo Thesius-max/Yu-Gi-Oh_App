@@ -47,6 +47,26 @@ WAS BEIM ERSTEN START PASSIERT
   erhalten (vorher wird automatisch eine Sicherung angelegt).
 
 ----------------------------------------------------------
+UPDATES DER APP
+----------------------------------------------------------
+Die App prueft beim Start automatisch, ob es eine neue Version
+gibt (eine winzige Anfrage an GitHub; ohne Internet passiert
+einfach nichts). Gibt es eine, erscheint ein Hinweis mit einem
+Knopf zur Download-Seite. Manuell geht es jederzeit ueber
+"Daten -> Auf neue App-Version pruefen".
+
+Ein Update einspielen:
+1. Neues ZIP fuer eure Plattform herunterladen.
+2. Alten App-Ordner loeschen (bzw. App im Programme-Ordner ersetzen).
+3. Neues ZIP entpacken, App starten -- fertig.
+
+Eure Daten sind davon NICHT betroffen: Sammlung, Decks und Kombos
+liegen ausserhalb des App-Ordners (siehe unten) und bleiben bei
+jedem Update erhalten. Zusaetzlich legt die neue Version beim
+ersten Start automatisch eine Sicherung der Datenbank an, bevor
+sie etwas daran anpasst.
+
+----------------------------------------------------------
 WO LIEGEN MEINE DATEN
 ----------------------------------------------------------
 Sammlung, Decks und Kombos werden hier gespeichert:

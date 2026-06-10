@@ -39,6 +39,15 @@ DBVER_URL = f"{API_BASE}/checkDBVer.php"
 
 APP_DIR_NAME = "YugiohSammlung"
 
+# App-Version: eine Nummer fuer alle Plattform-Builds (Windows + macOS).
+# Release-Ritual: hochzaehlen -> committen -> Tag "v<version>" pushen; die CI
+# baut dann alle drei ZIPs und haengt sie an EIN gemeinsames GitHub-Release.
+APP_VERSION = "0.2.0"
+RELEASES_API_URL = (
+    "https://api.github.com/repos/Thesius-max/Yu-Gi-Oh_App/releases/latest"
+)
+RELEASES_PAGE_URL = "https://github.com/Thesius-max/Yu-Gi-Oh_App/releases/latest"
+
 
 def _app_data_dir() -> Path:
     """Plattformueblicher, beschreibbarer Ort fuer Nutzerdaten (nur stdlib,
@@ -109,6 +118,88 @@ def fetch_all_cards_de() -> dict[int, dict]:
     Nicht alle Karten haben eine Uebersetzung -- fehlende bleiben einfach leer."""
     payload = _http_get_json(CARDINFO_URL + "?language=de", timeout=120)
     return {c["id"]: c for c in payload.get("data", [])}
+
+
+def _parse_version(version: str) -> tuple[int, ...]:
+    """'v0.2.0' -> (0, 2, 0). Robust gegen Praefixe/Anhaengsel; ohne Ziffern
+    ergibt sich (0,), damit kaputte Tags nie als 'neuer' gelten."""
+    nums = re.findall(r"\d+", version)
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+def check_app_update() -> Optional[dict]:
+    """Fragt das neueste GitHub-Release ab (ein Mini-Request). Rueckgabe:
+    {'version', 'url', 'notes'} wenn es neuer als APP_VERSION ist, sonst
+    None. Netzfehler schlagen als Exception durch -- der Aufrufer
+    entscheidet, ob das still bleibt (Startup) oder gemeldet wird (Menue)."""
+    data = _http_get_json(RELEASES_API_URL, timeout=15)
+    tag = data.get("tag_name") or ""
+    if _parse_version(tag) <= _parse_version(APP_VERSION):
+        return None
+    return {
+        "version": tag.lstrip("v"),
+        "url": data.get("html_url") or RELEASES_PAGE_URL,
+        "notes": (data.get("body") or "").strip(),
+    }
+
+
+def migration_backup(db_path: str = DEFAULT_DB) -> Optional[str]:
+    """Sichert die Benutzer-DB beim ersten Start einer neuen App-Version --
+    VOR ensure_schema, damit eine schiefgehende Migration nie der letzte
+    Stand ist. Merkt sich die Version in meta ('app_version'); es bleibt nur
+    die juengste Versions-Sicherung liegen. Rueckgabe: Pfad der Sicherung
+    oder None, wenn keine noetig war."""
+    if not os.path.exists(db_path):
+        return None
+    conn = _connect(db_path)
+    try:
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='app_version';"
+            ).fetchone()
+            stored = row["value"] if row else None
+        except sqlite3.OperationalError:
+            stored = None  # sehr alte DB ohne meta-Tabelle
+        if stored == APP_VERSION:
+            return None
+        # Frische DB ohne Benutzerdaten (typisch: Erststart mit Seed-DB):
+        # nur die Version vermerken, keine sinnlose Kopie anlegen.
+        has_user_data = False
+        for table in ("collection", "decks", "combos", "card_translations"):
+            try:
+                if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                    has_user_data = True
+                    break
+            except sqlite3.OperationalError:
+                pass  # Tabelle existiert noch nicht -> dort auch keine Daten
+        backup = None
+        if has_user_data:
+            backup = f"{db_path}.bak-v{stored or 'alt'}"
+            shutil.copy2(db_path, backup)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);"
+        )
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('app_version', ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+            (APP_VERSION,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if backup is None:
+        return None
+    # Nur die frische Sicherung behalten -- die DB ist zu gross, um je
+    # Version eine Kopie anzusammeln.
+    prefix = os.path.basename(db_path) + ".bak-v"
+    folder = os.path.dirname(backup) or "."
+    for name in os.listdir(folder):
+        if name.startswith(prefix) and os.path.join(folder, name) != backup:
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass  # liegengebliebene Sicherung ist kein Starthindernis
+    return backup
 
 
 def fetch_db_version() -> Optional[str]:

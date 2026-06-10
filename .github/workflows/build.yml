@@ -1,18 +1,20 @@
-# Baut das macOS-Bundle (.app) auf GitHub-Runnern -- PyInstaller kann
-# nicht cross-kompilieren, und ein eigener Mac steht nicht zur Verfuegung.
+# Baut alle Verteil-Bundles auf GitHub-Runnern -- PyInstaller kann nicht
+# cross-kompilieren, deshalb je Plattform ein eigener Runner.
 #
-# Zwei Varianten:
-#   - arm64  (macos-latest):   Apple Silicon, MacBooks ab ca. 2021
-#   - x86_64 (macos-15-intel): aeltere Intel-Macs; GitHub bietet diesen
+# Drei Varianten, EINE Versionsnummer (APP_VERSION in yugioh_db.py):
+#   - windows (windows-latest): One-Folder-Bundle mit .exe
+#   - arm64   (macos-latest):   Apple Silicon, MacBooks ab ca. 2021
+#   - x86_64  (macos-15-intel): aeltere Intel-Macs; GitHub bietet diesen
 #     Runner noch bis August 2027 an, danach endet der Intel-Support.
 #
 # Ausloeser:
 #   - manuell ueber den Actions-Tab ("Run workflow") -> Ergebnis als Artefakt
 #     (Download erfordert GitHub-Login; ZIP dann selbst weitergeben)
-#   - Git-Tag "v*" (z.B. v0.1.0) -> beide ZIPs haengen zusaetzlich am
-#     GitHub-Release und sind OHNE Login oeffentlich herunterladbar
+#   - Git-Tag "v*" (z.B. v0.2.0) -> alle drei ZIPs haengen an EINEM
+#     gemeinsamen GitHub-Release und sind OHNE Login oeffentlich
+#     herunterladbar. Der Tag muss zur APP_VERSION passen.
 
-name: macOS-Build
+name: Build
 
 on:
   workflow_dispatch:
@@ -28,7 +30,36 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Abhaengigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Seed-Datenbank erzeugen (YGOPRODeck-API)
+        run: python yugioh_db.py build seed.sqlite3
+
+      - name: App bauen
+        run: python build_app.py
+
+      - name: Bundle paketieren (Ordner + Anleitung)
+        # TESTER_LIESMICH.txt legt build_app.py bereits in den Ordner.
+        run: Compress-Archive -Path dist/YugiohSammlung -DestinationPath YugiohSammlung-windows.zip
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: YugiohSammlung-windows
+          path: YugiohSammlung-windows.zip
+
+  build-macos:
     strategy:
       fail-fast: false
       matrix:
@@ -70,11 +101,11 @@ jobs:
           name: YugiohSammlung-macos-${{ matrix.arch }}
           path: YugiohSammlung-macos-${{ matrix.arch }}.zip
 
-  # Eigener Job statt Release-Schritt je Matrix-Eintrag: beide Builds haengen
+  # Eigener Job statt Release-Schritt je Matrix-Eintrag: alle Builds haengen
   # ihre ZIPs gesammelt an, ohne sich beim Anlegen des Release zu ueberholen.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5

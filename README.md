@@ -111,14 +111,31 @@ Datenort und Feedback-Weg.
 auf Windows, ein macOS-`.app` auf einem Mac erzeugt werden. Das Skript läuft auf
 beiden Plattformen identisch.
 
-Ohne eigenen Mac übernimmt das der GitHub-Actions-Workflow **macOS-Build**
-(`.github/workflows/macos-build.yml`): manuell über den Actions-Tab startbar
+Den kompletten Build übernimmt der GitHub-Actions-Workflow **Build**
+(`.github/workflows/build.yml`): manuell über den Actions-Tab startbar
 (Ergebnis als Artefakt) oder automatisch bei einem Git-Tag `v*` – dann hängen
-die ZIPs öffentlich am GitHub-Release. Gebaut werden zwei Varianten:
-**arm64** für Apple Silicon (MacBooks ab ca. 2021) und **x86_64** für ältere
-Intel-Macs (GitHubs Intel-Runner existiert noch bis August 2027). Der erste
-Start der unsignierten App erfordert Rechtsklick → „Öffnen" (Details in
+alle ZIPs öffentlich an **einem** gemeinsamen GitHub-Release. Gebaut werden
+drei Varianten mit einer Versionsnummer: **windows**, **arm64** für Apple
+Silicon (MacBooks ab ca. 2021) und **x86_64** für ältere Intel-Macs (GitHubs
+Intel-Runner existiert noch bis August 2027). Der erste Start der unsignierten
+App erfordert unter macOS Rechtsklick → „Öffnen" (Details in
 `TESTER_LIESMICH.txt`).
+
+## Release & Updates
+
+Eine Version = ein Release = drei ZIPs. Das Release-Ritual:
+
+1. `APP_VERSION` in `yugioh_db.py` hochzählen und committen.
+2. Tag mit derselben Nummer pushen: `git tag v0.2.0 && git push origin v0.2.0`.
+3. Die CI baut alle drei Bundles und hängt sie ans GitHub-Release;
+   Release-Notes auf GitHub ergänzen (erscheinen im Update-Hinweis der App).
+
+Die App prüft beim Start (still) und über „Daten → Auf neue App-Version
+prüfen" gegen das neueste GitHub-Release und bietet die Download-Seite an —
+kein Auto-Updater, bewusst simpel. Benutzerdaten liegen außerhalb des
+App-Ordners und überleben jedes Update; zusätzlich legt die App beim ersten
+Start einer neuen Version automatisch eine Sicherung der Datenbank an
+(`yugioh.sqlite3.bak-v<alt>`), bevor `ensure_schema` migriert.
 
 ## Projektstruktur
 
