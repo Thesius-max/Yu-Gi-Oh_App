@@ -735,6 +735,10 @@ class DeckView(QWidget):
         cv.addWidget(QLabel("Bausteine (vorhanden / benötigt):"))
         self.combo_pieces = QListWidget()
         cv.addWidget(self.combo_pieces, stretch=1)
+        cv.addWidget(QLabel("Schritte:"))
+        self.combo_steps = QListWidget()
+        self.combo_steps.setWordWrap(True)
+        cv.addWidget(self.combo_steps, stretch=1)
         self.add_missing_btn = QPushButton("Fehlende Bausteine ins Deck")
         self.add_missing_btn.clicked.connect(self._add_missing)
         cv.addWidget(self.add_missing_btn)
@@ -816,6 +820,7 @@ class DeckView(QWidget):
     def _refresh_combos(self) -> None:
         self.combo_list.clear()
         self.combo_pieces.clear()
+        self.combo_steps.clear()
         if self.deck_id is None or not self.repo.exists():
             return
         for c in ydb.combos_for_deck(self.repo.db_path, self.deck_id):
@@ -829,6 +834,7 @@ class DeckView(QWidget):
 
     def _on_combo_selected(self, current: QListWidgetItem, _previous=None) -> None:
         self.combo_pieces.clear()
+        self.combo_steps.clear()
         if current is None or self.deck_id is None:
             return
         combo_id = current.data(Qt.ItemDataRole.UserRole)
@@ -838,6 +844,14 @@ class DeckView(QWidget):
             self.combo_pieces.addItem(
                 f"{mark}  {p['name']}   {p['have']}/{p['needed']}"
             )
+        steps = ydb.combo_steps(self.repo.db_path, combo_id)
+        if steps:
+            for s in steps:
+                self.combo_steps.addItem(f"{s['step_no']}.  {s['text']}")
+        else:
+            item = QListWidgetItem("(keine Schritte erfasst)")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.combo_steps.addItem(item)
 
     def _select_combo(self, combo_id: int) -> bool:
         for i in range(self.combo_list.count()):
