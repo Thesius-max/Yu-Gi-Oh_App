@@ -946,6 +946,62 @@ def move_deck_card(
         conn.close()
 
 
+def deck_availability(db_path: str, deck_id: int) -> list[dict]:
+    """Sammlung<->Deck-Abgleich fuer ein Deck. Karten liegen physisch vor:
+    Kopien, die in anderen Decks stecken, stehen diesem Deck nicht zur
+    Verfuegung. Je Karte im Deck (alle Zonen):
+      in_deck   -- Kopien in diesem Deck
+      owned     -- Kopien im Bestand (alle Drucke zusammen)
+      elsewhere -- Kopien, die andere Decks binden
+      missing   -- fuer dieses Deck fehlende Kopien
+    Nur Hinweis-Charakter: das Deckbuilding wird nicht blockiert (geplante
+    Kaeufe / Proxies bleiben moeglich)."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT dc.card_id, c.name, c.name_de,
+                      SUM(dc.quantity) AS in_deck,
+                      COALESCE((SELECT SUM(col.quantity) FROM collection col
+                                WHERE col.card_id = dc.card_id), 0) AS owned,
+                      COALESCE((SELECT SUM(o.quantity) FROM deck_cards o
+                                WHERE o.card_id = dc.card_id
+                                  AND o.deck_id != dc.deck_id), 0) AS elsewhere
+               FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+               WHERE dc.deck_id = ?
+               GROUP BY dc.card_id
+               ORDER BY COALESCE(c.name_de, c.name)""",
+            (deck_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        available = max(0, r["owned"] - r["elsewhere"])
+        out.append({
+            "card_id": r["card_id"],
+            "name": r["name_de"] or r["name"],
+            "in_deck": r["in_deck"],
+            "owned": r["owned"],
+            "elsewhere": r["elsewhere"],
+            "missing": max(0, r["in_deck"] - available),
+        })
+    return out
+
+
+def card_bound_in_decks(db_path: str, card_id: int) -> int:
+    """Wie viele Kopien einer Karte ueber alle Decks zusammen verplant sind."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) AS n FROM deck_cards "
+            "WHERE card_id = ?",
+            (card_id,),
+        ).fetchone()
+        return int(row["n"])
+    finally:
+        conn.close()
+
+
 def deck_counts(db_path: str, deck_id: int) -> dict:
     """Kartenzahl je Zone als {'main': n, 'extra': n, 'side': n}."""
     conn = _connect(db_path)

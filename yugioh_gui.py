@@ -68,8 +68,13 @@ class _ImageLoader(QRunnable):
                 self._signals.failed.emit(self._card_id)
             else:
                 self._signals.loaded.emit(self._card_id, img)
+        except RuntimeError:
+            pass  # Empfaenger beim App-Ende schon abgebaut -- nichts zu melden
         except Exception:
-            self._signals.failed.emit(self._card_id)
+            try:
+                self._signals.failed.emit(self._card_id)
+            except RuntimeError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +520,18 @@ class DetailPanel(QWidget):
         self.text.setPlainText(card["desc_de"] or card["description"] or "")
 
         self._load_image(card["id"])
-        self.owned.setText(f"im Bestand: {self.repo.owned_count(card['id'])}")
+        self._update_owned(card["id"])
         self._set_enabled(True)
+
+    def _update_owned(self, card_id: int) -> None:
+        owned = self.repo.owned_count(card_id)
+        bound = ydb.card_bound_in_decks(self.repo.db_path, card_id)
+        text = f"im Bestand: {owned}"
+        if bound:
+            text += f"  ·  in Decks: {bound}"
+            if bound > owned:
+                text += "  ⚠"
+        self.owned.setText(text)
 
     @staticmethod
     def _scaled(pixmap: QPixmap) -> QPixmap:
@@ -561,7 +576,7 @@ class DetailPanel(QWidget):
         if self.current_id is None:
             return
         ydb.add_to_collection(self.repo.db_path, self.current_id, self.qty.value())
-        self.owned.setText(f"im Bestand: {self.repo.owned_count(self.current_id)}")
+        self._update_owned(self.current_id)
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +781,7 @@ class ZonePanel(QGroupBox):
         super().__init__(ZONE_LABELS[zone])
         self.zone = zone
         self.owner = owner
+        self._shortages: dict[int, int] = {}
 
         v = QVBoxLayout(self)
         self.list = QListWidget()
@@ -798,8 +814,9 @@ class ZonePanel(QGroupBox):
         item = self.list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
-    def populate(self, rows) -> int:
+    def populate(self, rows, shortages: dict[int, int] | None = None) -> int:
         self.list.clear()
+        self._shortages = shortages or {}
         total = sum(r["quantity"] for r in rows)
         # Nur das Main-Deck nach Monster/Zauber/Falle gruppieren; Extra ist
         # ohnehin reines Extra-Monster, Side bleibt eine einfache Liste.
@@ -822,8 +839,18 @@ class ZonePanel(QGroupBox):
         return total
 
     def _add_card_item(self, r) -> None:
-        item = QListWidgetItem(f"{r['quantity']}x  {r['name']}")
+        text = f"{r['quantity']}x  {r['name']}"
+        # Fehlbestand gilt je Karte ueber alle Zonen dieses Decks zusammen.
+        missing = self._shortages.get(r["card_id"], 0)
+        if missing:
+            text += f"   ⚠ fehlt {missing}"
+        item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, r["card_id"])
+        if missing:
+            item.setToolTip(
+                f"Bestand deckt dieses Deck nicht: {missing} Kopie(n) fehlen "
+                "(Kopien in anderen Decks zählen als gebunden)."
+            )
         self.list.addItem(item)
 
     def _add_group_header(self, label: str, count: int) -> None:
@@ -1111,11 +1138,25 @@ class DeckView(QWidget):
             self._refresh_plan()
             self._refresh_combos()
             return
+        # Sammlung<->Deck-Abgleich: fehlende Kopien je Karte (andere Decks
+        # binden Bestand). Nur Warnung, blockiert nichts.
+        availability = ydb.deck_availability(self.repo.db_path, self.deck_id)
+        shortages = {
+            a["card_id"]: a["missing"] for a in availability if a["missing"]
+        }
         for zone, panel in self.panels.items():
             rows = ydb.deck_cards(self.repo.db_path, self.deck_id, zone)
-            total = panel.populate(rows)
+            total = panel.populate(rows, shortages)
             panel.setTitle(f"{ZONE_LABELS[zone]}  ({total})")
         checks = ydb.validate_deck(self.repo.db_path, self.deck_id)
+        if shortages:
+            copies = sum(shortages.values())
+            checks.append(
+                (False, f"Bestand: {copies} Kopie(n) fehlen "
+                        f"({len(shortages)} Karten)")
+            )
+        else:
+            checks.append((True, "Bestand gedeckt"))
         parts = [("\u2713 " if ok else "\u2717 ") + txt for ok, txt in checks]
         self.status.setText("     ".join(parts))
         self._refresh_consistency()
