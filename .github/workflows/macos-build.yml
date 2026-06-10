@@ -21,6 +21,11 @@ on:
 permissions:
   contents: write   # fuer das Anhaengen ans Release bei Tag-Builds
 
+# Ab 2026-06-16 erzwingt GitHub Node 24 fuer JavaScript-Actions; hier schon
+# jetzt aktiv, damit der Workflow nicht am Stichtag ueberraschend bricht.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: macos-latest
