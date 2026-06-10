@@ -197,16 +197,18 @@ CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
 
 -- Kombo-Bibliothek: eigene Guides aus Bausteinen (Karten) und Schritten.
 CREATE TABLE IF NOT EXISTS combos (
-    combo_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name      TEXT NOT NULL,
-    archetype TEXT,
-    notes     TEXT
+    combo_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    archetype    TEXT,
+    notes        TEXT,
+    boss_card_id INTEGER REFERENCES cards(id)   -- Zielmonster der Kombo (optional)
 );
 
 CREATE TABLE IF NOT EXISTS combo_cards (
     combo_id  INTEGER NOT NULL REFERENCES combos(combo_id) ON DELETE CASCADE,
     card_id   INTEGER NOT NULL REFERENCES cards(id),
     quantity  INTEGER NOT NULL DEFAULT 1,
+    role      TEXT,   -- starter | extender | payoff | handtrap (NULL = uneingestuft)
     PRIMARY KEY (combo_id, card_id)
 );
 
@@ -226,18 +228,29 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Ruestet Spalten nach, die juenger sind als die Tabelle selbst
+    (CREATE TABLE IF NOT EXISTS ergaenzt keine Spalten). Idempotent."""
+    for table, col, decl in (
+        ("cards", "name_de", "TEXT"),
+        ("cards", "desc_de", "TEXT"),
+        ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
+        ("combo_cards", "role", "TEXT"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass  # Spalte existiert bereits
+
+
 def ensure_schema(db_path: str = DEFAULT_DB) -> None:
     """Legt fehlende Tabellen an (idempotent). Auch fuer bestehende DBs,
     damit nachgeruestete Tabellen wie decks/deck_cards vorhanden sind."""
     conn = _connect(db_path)
     try:
         conn.executescript(SCHEMA)
-        # Migration fuer bestehende DBs, die name_de / desc_de noch nicht haben.
-        for col in ("name_de", "desc_de"):
-            try:
-                conn.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass  # Spalte existiert bereits
+        conn.commit()
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
@@ -272,12 +285,7 @@ def build_database(
     conn = _connect(db_path)
     try:
         conn.executescript(SCHEMA)
-        # Migration fuer bestehende DBs, die name_de / desc_de noch nicht haben.
-        for col in ("name_de", "desc_de"):
-            try:
-                conn.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass
+        _migrate(conn)
         # Karten per UPSERT aktualisieren statt zu loeschen -- sonst wuerden
         # Fremdschluessel aus collection/deck_cards beim Update brechen.
         conn.execute("DELETE FROM card_sets;")
@@ -863,6 +871,10 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
 
 MAX_COMBO_PIECE = 3  # mehr als 3 Kopien je Karte sind ohnehin nicht spielbar
 
+# Rolle eines Bausteins INNERHALB einer Kombo (dieselbe Karte kann anderswo
+# eine andere Rolle haben). NULL = noch nicht eingestuft.
+COMBO_ROLES = ("starter", "extender", "payoff", "handtrap")
+
 
 def create_combo(db_path: str, name: str, archetype: Optional[str] = None) -> int:
     conn = _connect(db_path)
@@ -890,7 +902,10 @@ def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
     conn = _connect(db_path)
     try:
         return conn.execute(
-            "SELECT combo_id, name, archetype, notes FROM combos WHERE combo_id = ?",
+            """SELECT cb.combo_id, cb.name, cb.archetype, cb.notes,
+                      cb.boss_card_id, b.name AS boss_name
+               FROM combos cb LEFT JOIN cards b ON b.id = cb.boss_card_id
+               WHERE cb.combo_id = ?""",
             (combo_id,),
         ).fetchone()
     finally:
@@ -905,6 +920,19 @@ def update_combo(
         conn.execute(
             "UPDATE combos SET name = ?, archetype = ? WHERE combo_id = ?",
             (name, archetype, combo_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_combo_boss(db_path: str, combo_id: int, card_id: Optional[int]) -> None:
+    """Setzt das Zielmonster (Boss) einer Kombo; None entfernt es."""
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE combos SET boss_card_id = ? WHERE combo_id = ?",
+            (card_id, combo_id),
         )
         conn.commit()
     finally:
@@ -963,6 +991,23 @@ def set_combo_card_quantity(
         conn.close()
 
 
+def set_combo_card_role(
+    db_path: str, combo_id: int, card_id: int, role: Optional[str]
+) -> None:
+    """Setzt die Rolle eines Bausteins (siehe COMBO_ROLES); None loescht sie."""
+    if role is not None and role not in COMBO_ROLES:
+        raise ValueError(f"Unbekannte Rolle: {role}")
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE combo_cards SET role = ? WHERE combo_id = ? AND card_id = ?",
+            (role, combo_id, card_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def remove_combo_card(db_path: str, combo_id: int, card_id: int) -> None:
     conn = _connect(db_path)
     try:
@@ -979,7 +1024,8 @@ def combo_cards(db_path: str, combo_id: int) -> list[sqlite3.Row]:
     conn = _connect(db_path)
     try:
         return conn.execute(
-            """SELECT cc.card_id, c.name, c.type, c.frame_type, cc.quantity
+            """SELECT cc.card_id, c.name, c.type, c.frame_type,
+                      cc.quantity, cc.role
                FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
                WHERE cc.combo_id = ? ORDER BY c.name""",
             (combo_id,),

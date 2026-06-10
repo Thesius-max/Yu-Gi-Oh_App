@@ -127,6 +127,17 @@ _CATEGORY_DE: dict[str, str] = {
 _CATEGORY_ORDER = ("monster", "spell", "trap", "other")
 _GROUP_HEADER_BG = QColor("#d8d8d8")  # dezente Kopfzeile in der Sammlungstabelle
 
+# Anzeigenamen der Baustein-Rollen (die Begriffe sind im deutschen
+# Yu-Gi-Oh-Sprachgebrauch etabliert, daher unübersetzt).
+_ROLE_DE: dict[str, str] = {
+    "starter":  "Starter",
+    "extender": "Extender",
+    "payoff":   "Payoff",
+    "handtrap": "Handtrap",
+}
+# Zweiter Daten-Slot an Bausteine-Listeneinträgen: die Rolle (UserRole = card_id).
+_PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
+
 
 _RACE_DE: dict[str, str] = {
     # Monster-Typen
@@ -981,12 +992,18 @@ class ComboView(QWidget):
         form = QFormLayout()
         self.name_edit = QLineEdit()
         self.arch_edit = QLineEdit()
+        # Boss = Zielmonster der Kombo, gew\u00e4hlt aus den Bausteinen.
+        # Wird (wie die Rollen) sofort gespeichert, nicht erst \u00fcber 'Speichern'.
+        self.boss_cb = QComboBox()
+        self.boss_cb.currentIndexChanged.connect(self._on_boss_changed)
         form.addRow("Name", self.name_edit)
         form.addRow("Archetyp", self.arch_edit)
+        form.addRow("Boss", self.boss_cb)
         rv.addLayout(form)
 
         rv.addWidget(QLabel("Bausteine:"))
         self.pieces = QListWidget()
+        self.pieces.currentItemChanged.connect(self._on_piece_selected)
         rv.addWidget(self.pieces, stretch=1)
         piece_row = QHBoxLayout()
         minus = QPushButton("\u22121")
@@ -998,6 +1015,13 @@ class ComboView(QWidget):
         piece_row.addWidget(minus)
         piece_row.addWidget(plus)
         piece_row.addWidget(rem)
+        piece_row.addWidget(QLabel("Rolle:"))
+        self.role_cb = QComboBox()
+        self.role_cb.addItem("(keine)", None)
+        for r in ydb.COMBO_ROLES:
+            self.role_cb.addItem(_ROLE_DE[r], r)
+        self.role_cb.currentIndexChanged.connect(self._on_role_changed)
+        piece_row.addWidget(self.role_cb)
         piece_row.addStretch()
         rv.addLayout(piece_row)
         rv.addWidget(QLabel(
@@ -1121,6 +1145,9 @@ class ComboView(QWidget):
     def _clear_editor(self) -> None:
         self.name_edit.clear()
         self.arch_edit.clear()
+        self.boss_cb.blockSignals(True)
+        self.boss_cb.clear()
+        self.boss_cb.blockSignals(False)
         self.pieces.clear()
         self.steps_edit.clear()
         self.coll_status.clear()
@@ -1133,14 +1160,75 @@ class ComboView(QWidget):
         self._refresh_collection_coverage()
         self._update_current_label()
 
+    @staticmethod
+    def _piece_label(p) -> str:
+        role = f"   [{_ROLE_DE[p['role']]}]" if p["role"] else ""
+        return f"{p['quantity']}x  {p['name']}{role}"
+
     def _load_pieces(self) -> None:
         self.pieces.clear()
         if self.combo_id is None:
             return
-        for p in ydb.combo_cards(self.repo.db_path, self.combo_id):
-            item = QListWidgetItem(f"{p['quantity']}x  {p['name']}")
+        pieces = ydb.combo_cards(self.repo.db_path, self.combo_id)
+        for p in pieces:
+            item = QListWidgetItem(self._piece_label(p))
             item.setData(Qt.ItemDataRole.UserRole, p["card_id"])
+            item.setData(_PIECE_ROLE_DATA, p["role"])
             self.pieces.addItem(item)
+        self._populate_boss(pieces)
+
+    def _populate_boss(self, pieces) -> None:
+        """Boss-Auswahl aus den Bausteinen neu aufbauen; gespeicherten Boss
+        auch dann anzeigen, wenn er (nicht mehr) unter den Bausteinen ist."""
+        combo = ydb.get_combo(self.repo.db_path, self.combo_id)
+        boss_id = combo["boss_card_id"] if combo else None
+        self.boss_cb.blockSignals(True)
+        self.boss_cb.clear()
+        self.boss_cb.addItem("(kein Boss)", None)
+        for p in pieces:
+            self.boss_cb.addItem(p["name"], p["card_id"])
+        if boss_id is not None:
+            idx = self.boss_cb.findData(boss_id)
+            if idx < 0:
+                self.boss_cb.addItem(combo["boss_name"] or str(boss_id), boss_id)
+                idx = self.boss_cb.count() - 1
+            self.boss_cb.setCurrentIndex(idx)
+        self.boss_cb.blockSignals(False)
+
+    def _on_boss_changed(self, _index: int) -> None:
+        if self.combo_id is None:
+            return
+        ydb.set_combo_boss(
+            self.repo.db_path, self.combo_id, self.boss_cb.currentData()
+        )
+
+    def _on_piece_selected(self, current: QListWidgetItem, _previous=None) -> None:
+        # Rollen-Dropdown auf den gewählten Baustein stellen, ohne dabei
+        # ein Speichern auszulösen.
+        self.role_cb.blockSignals(True)
+        if current is None:
+            self.role_cb.setCurrentIndex(0)
+        else:
+            idx = self.role_cb.findData(current.data(_PIECE_ROLE_DATA))
+            self.role_cb.setCurrentIndex(max(idx, 0))
+        self.role_cb.blockSignals(False)
+
+    def _on_role_changed(self, _index: int) -> None:
+        item = self.pieces.currentItem()
+        if item is None or self.combo_id is None:
+            return
+        card_id = item.data(Qt.ItemDataRole.UserRole)
+        role = self.role_cb.currentData()
+        ydb.set_combo_card_role(self.repo.db_path, self.combo_id, card_id, role)
+        # Nur den betroffenen Eintrag aktualisieren, damit die Auswahl bleibt.
+        item.setData(_PIECE_ROLE_DATA, role)
+        p = next(
+            (p for p in ydb.combo_cards(self.repo.db_path, self.combo_id)
+             if p["card_id"] == card_id),
+            None,
+        )
+        if p is not None:
+            item.setText(self._piece_label(p))
 
     # -- Aktionen -----------------------------------------------------------
 
