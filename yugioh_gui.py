@@ -710,11 +710,72 @@ class ZonePanel(QGroupBox):
         self.list.addItem(item)
 
 
+class ComboFromDeckDialog(QDialog):
+    """Neue Kombo direkt aus den Karten des aktiven Decks: Name vergeben,
+    Bausteine ankreuzen (Main + Extra — das Side Deck zählt bei der
+    Kombo-Abdeckung ohnehin nicht mit)."""
+
+    def __init__(self, repo: CardRepository, deck_id: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kombo aus Deck anlegen")
+        self.resize(420, 520)
+        v = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("z.B. 'Karte X → Endboard Y'")
+        form.addRow("Name", self.name_edit)
+        v.addLayout(form)
+        v.addWidget(QLabel("Bausteine ankreuzen:"))
+        self.list = QListWidget()
+        for zone in ("main", "extra"):
+            rows = ydb.deck_cards(repo.db_path, deck_id, zone)
+            if not rows:
+                continue
+            header = QListWidgetItem(f"— {ZONE_LABELS[zone]} —")
+            header.setFlags(Qt.ItemFlag.NoItemFlags)
+            font = header.font(); font.setBold(True); header.setFont(font)
+            self.list.addItem(header)
+            for r in rows:
+                item = QListWidgetItem(r["name"])
+                item.setData(Qt.ItemDataRole.UserRole, r["card_id"])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self.list.addItem(item)
+        v.addWidget(self.list, stretch=1)
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Anlegen")
+        ok_btn.clicked.connect(self._accept)
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        v.addLayout(btn_row)
+
+    def _accept(self) -> None:
+        if not self.name_edit.text().strip():
+            QMessageBox.information(self, "Kombo", "Bitte einen Namen vergeben.")
+            return
+        self.accept()
+
+    def combo_name(self) -> str:
+        return self.name_edit.text().strip()
+
+    def selected_card_ids(self) -> list[int]:
+        return [
+            self.list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.list.count())
+            if self.list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+
+
 class DeckView(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
         self.repo = repo
         self.deck_id: int | None = None
+        # Wird von MainWindow gesetzt: oeffnet eine Kombo im Kombos-Tab.
+        self.open_combo_callback = None
 
         layout = QVBoxLayout(self)
 
@@ -770,6 +831,9 @@ class DeckView(QWidget):
         self.add_missing_btn = QPushButton("Fehlende Bausteine ins Deck")
         self.add_missing_btn.clicked.connect(self._add_missing)
         kv.addWidget(self.add_missing_btn)
+        self.new_combo_btn = QPushButton("Neue Kombo aus diesem Deck…")
+        self.new_combo_btn.clicked.connect(self._new_combo_from_deck)
+        kv.addWidget(self.new_combo_btn)
         self.helper_tabs.addTab(kombos_tab, "Kombos")
 
         plan_tab = QWidget()
@@ -1076,6 +1140,23 @@ class DeckView(QWidget):
         self.refresh()
         self._select_combo(combo_id)
 
+    def _new_combo_from_deck(self) -> None:
+        """Kombo mit diesem Deck als Heimat-Deck anlegen; Bausteine kommen
+        direkt aus den Deck-Karten statt über die Suche."""
+        if self.deck_id is None:
+            return
+        dlg = ComboFromDeckDialog(self.repo, self.deck_id, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        combo_id = ydb.create_combo(
+            self.repo.db_path, dlg.combo_name(), deck_id=self.deck_id
+        )
+        for cid in dlg.selected_card_ids():
+            ydb.add_combo_card(self.repo.db_path, combo_id, cid, 1)
+        self.refresh()
+        if self.open_combo_callback is not None:
+            self.open_combo_callback(combo_id)
+
     # -- Aktionen aus den Zonen ---------------------------------------------
 
     def adjust(self, zone: str, delta: int) -> None:
@@ -1161,9 +1242,15 @@ class ComboView(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Links: Liste + Neu/Loeschen
+        # Links: Deck-Filter + Liste + Neu/Loeschen
         left = QWidget()
         lv = QVBoxLayout(left)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Deck:"))
+        self.deck_filter_cb = QComboBox()
+        self.deck_filter_cb.currentIndexChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self.deck_filter_cb, stretch=1)
+        lv.addLayout(filter_row)
         lv.addWidget(QLabel("Meine Kombos:"))
         self.combo_list = QListWidget()
         self.combo_list.currentItemChanged.connect(self._on_select)
@@ -1187,8 +1274,13 @@ class ComboView(QWidget):
         # Wird (wie die Rollen) sofort gespeichert, nicht erst \u00fcber 'Speichern'.
         self.boss_cb = QComboBox()
         self.boss_cb.currentIndexChanged.connect(self._on_boss_changed)
+        # Heimat-Deck = optionale Verknuepfung (Filter/Komfort), kein Besitz.
+        # Speichert sofort, wie Rollen und Boss.
+        self.home_cb = QComboBox()
+        self.home_cb.currentIndexChanged.connect(self._on_home_changed)
         form.addRow("Name", self.name_edit)
         form.addRow("Archetyp", self.arch_edit)
+        form.addRow("Heimat-Deck", self.home_cb)
         form.addRow("Boss", self.boss_cb)
         rv.addLayout(form)
 
@@ -1197,12 +1289,15 @@ class ComboView(QWidget):
         self.pieces.currentItemChanged.connect(self._on_piece_selected)
         rv.addWidget(self.pieces, stretch=1)
         piece_row = QHBoxLayout()
+        add_piece_btn = QPushButton("+ Baustein\u2026")
+        add_piece_btn.clicked.connect(self._add_piece_dialog)
         minus = QPushButton("\u22121")
         plus = QPushButton("+1")
         rem = QPushButton("Entfernen")
         minus.clicked.connect(lambda: self._adjust_piece(-1))
         plus.clicked.connect(lambda: self._adjust_piece(+1))
         rem.clicked.connect(self._remove_piece)
+        piece_row.addWidget(add_piece_btn)
         piece_row.addWidget(minus)
         piece_row.addWidget(plus)
         piece_row.addWidget(rem)
@@ -1215,9 +1310,6 @@ class ComboView(QWidget):
         piece_row.addWidget(self.role_cb)
         piece_row.addStretch()
         rv.addLayout(piece_row)
-        rv.addWidget(QLabel(
-            "Karten über den Tab 'Suche' mit '+ als Baustein' hinzufügen."
-        ))
 
         # Abgleich der Bausteine mit der eigenen Sammlung.
         coll_box = QGroupBox("Mit deiner Sammlung")
@@ -1229,12 +1321,11 @@ class ComboView(QWidget):
         cb_l.addWidget(self.coll_missing)
         rv.addWidget(coll_box, stretch=1)
 
-        rv.addWidget(QLabel("Schritte (eine Zeile pro Schritt):"))
+        rv.addWidget(QLabel(
+            "Schritte (eine Zeile pro Schritt — speichert automatisch):"
+        ))
         self.steps_edit = QTextEdit()
         rv.addWidget(self.steps_edit, stretch=1)
-        save_btn = QPushButton("Name, Archetyp und Schritte speichern")
-        save_btn.clicked.connect(self._save)
-        rv.addWidget(save_btn)
 
         splitter.addWidget(left)
         splitter.addWidget(self.editor)
@@ -1242,16 +1333,34 @@ class ComboView(QWidget):
         outer = QVBoxLayout(self)
         outer.addWidget(splitter)
 
+        # Auto-Speichern fuer Name/Archetyp/Schritte: Eingaben markieren die
+        # Kombo als "dirty"; gespeichert wird kurz danach (Timer) und immer
+        # bevor eine andere Kombo geladen oder die Liste neu aufgebaut wird.
+        self._loading = False        # unterdrueckt textChanged beim Befuellen
+        self._dirty_combo_id: int | None = None
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(600)
+        self._save_timer.timeout.connect(self.flush_pending)
+        self.name_edit.textChanged.connect(self._on_editor_changed)
+        self.arch_edit.textChanged.connect(self._on_editor_changed)
+        self.steps_edit.textChanged.connect(self._on_editor_changed)
+
         self.editor.setEnabled(False)
         self.refresh()
 
     # -- Liste / Auswahl ----------------------------------------------------
 
     def refresh(self) -> None:
+        self.flush_pending()  # offene Eingaben sichern, bevor neu geladen wird
         keep = self.combo_id
+        self._reload_deck_filter()
         self.combo_list.blockSignals(True)
         self.combo_list.clear()
-        combos = ydb.list_combos(self.repo.db_path) if self.repo.exists() else []
+        combos = (
+            ydb.list_combos(self.repo.db_path, self.deck_filter_cb.currentData())
+            if self.repo.exists() else []
+        )
         for c in combos:
             item = QListWidgetItem(self._combo_label(c))
             item.setData(Qt.ItemDataRole.UserRole, c["combo_id"])
@@ -1259,14 +1368,46 @@ class ComboView(QWidget):
         self.combo_list.blockSignals(False)
         if keep is not None and self._select_combo(keep):
             return
-        if not self.combo_list.count():
-            self._clear_editor()
-            self.editor.setEnabled(False)
+        # Aktive Kombo fiel aus dem Filter (oder es gibt keine): Editor leeren,
+        # damit Eingaben nicht versehentlich eine unsichtbare Kombo treffen.
+        self.combo_id = None
+        self._clear_editor()
+        self.editor.setEnabled(False)
+
+    def _reload_deck_filter(self) -> None:
+        """Deck-Filter neu aufbauen (Decks koennen sich geaendert haben);
+        die aktuelle Auswahl bleibt erhalten."""
+        keep = self.deck_filter_cb.currentData()
+        self.deck_filter_cb.blockSignals(True)
+        self.deck_filter_cb.clear()
+        self.deck_filter_cb.addItem("(alle)", None)
+        self.deck_filter_cb.addItem("(ohne Heimat-Deck)", 0)
+        decks = ydb.list_decks(self.repo.db_path) if self.repo.exists() else []
+        for d in decks:
+            self.deck_filter_cb.addItem(d["name"], d["deck_id"])
+        idx = self.deck_filter_cb.findData(keep)
+        self.deck_filter_cb.setCurrentIndex(max(idx, 0))
+        self.deck_filter_cb.blockSignals(False)
+
+    def _on_filter_changed(self, _index: int) -> None:
+        self.refresh()
+
+    def focus_combo(self, combo_id: int) -> None:
+        """Von aussen (Deck-Tab): Kombo anzeigen und auswaehlen; steht sie
+        nicht im aktuellen Filter, wird er auf '(alle)' zurueckgesetzt."""
+        self.refresh()
+        if not self._select_combo(combo_id):
+            self.deck_filter_cb.blockSignals(True)
+            self.deck_filter_cb.setCurrentIndex(0)  # "(alle)"
+            self.deck_filter_cb.blockSignals(False)
+            self.refresh()
+            self._select_combo(combo_id)
 
     def _combo_label(self, combo) -> str:
-        """Listentext einer Kombo inkl. Baubarkeit aus der Sammlung
-        (✓ = vollständig baubar, sonst 'vorhanden/gesamt')."""
+        """Listentext einer Kombo inkl. Heimat-Deck und Baubarkeit aus der
+        Sammlung (✓ = vollständig baubar, sonst 'vorhanden/gesamt')."""
         arch = f"   [{combo['archetype']}]" if combo["archetype"] else ""
+        deck = f"   · {combo['deck_name']}" if combo["deck_name"] else ""
         cov = ydb.combo_coverage_collection(self.repo.db_path, combo["combo_id"])
         if cov["total"] == 0:
             mark = ""
@@ -1274,7 +1415,7 @@ class ComboView(QWidget):
             mark = "   ✓"
         else:
             mark = f"   ({cov['covered']}/{cov['total']})"
-        return f"{combo['name']}{arch}{mark}"
+        return f"{combo['name']}{arch}{deck}{mark}"
 
     def _select_combo(self, combo_id: int) -> bool:
         for i in range(self.combo_list.count()):
@@ -1318,6 +1459,9 @@ class ComboView(QWidget):
                 )
 
     def _on_select(self, current: QListWidgetItem, _previous=None) -> None:
+        # Erst offene Eingaben der vorigen Kombo sichern -- die Felder zeigen
+        # an dieser Stelle noch deren Inhalt.
+        self.flush_pending()
         if current is None:
             self.combo_id = None
             self._clear_editor()
@@ -1325,24 +1469,32 @@ class ComboView(QWidget):
             return
         self.combo_id = current.data(Qt.ItemDataRole.UserRole)
         combo = ydb.get_combo(self.repo.db_path, self.combo_id)
+        self._loading = True
         self.name_edit.setText(combo["name"] or "")
         self.arch_edit.setText(combo["archetype"] or "")
-        self._load_pieces()
         steps = ydb.combo_steps(self.repo.db_path, self.combo_id)
         self.steps_edit.setPlainText("\n".join(s["text"] for s in steps))
+        self._loading = False
+        self._populate_home_deck(combo)
+        self._load_pieces()
         self._refresh_collection_coverage()
         self.editor.setEnabled(True)
 
     def _clear_editor(self) -> None:
+        self._loading = True
         self.name_edit.clear()
         self.arch_edit.clear()
         self.boss_cb.blockSignals(True)
         self.boss_cb.clear()
         self.boss_cb.blockSignals(False)
+        self.home_cb.blockSignals(True)
+        self.home_cb.clear()
+        self.home_cb.blockSignals(False)
         self.pieces.clear()
         self.steps_edit.clear()
         self.coll_status.clear()
         self.coll_missing.clear()
+        self._loading = False
 
     def _after_piece_change(self) -> None:
         """Nach Änderung der Bausteine: Liste, Sammlungs-Abgleich und den
@@ -1393,6 +1545,29 @@ class ComboView(QWidget):
             self.repo.db_path, self.combo_id, self.boss_cb.currentData()
         )
 
+    def _populate_home_deck(self, combo) -> None:
+        """Heimat-Deck-Auswahl mit allen Decks fuellen und auf den
+        gespeicherten Wert stellen, ohne ein Speichern auszuloesen."""
+        self.home_cb.blockSignals(True)
+        self.home_cb.clear()
+        self.home_cb.addItem("(keines)", None)
+        for d in ydb.list_decks(self.repo.db_path):
+            self.home_cb.addItem(d["name"], d["deck_id"])
+        if combo is not None and combo["deck_id"] is not None:
+            idx = self.home_cb.findData(combo["deck_id"])
+            self.home_cb.setCurrentIndex(max(idx, 0))
+        self.home_cb.blockSignals(False)
+
+    def _on_home_changed(self, _index: int) -> None:
+        if self.combo_id is None:
+            return
+        ydb.set_combo_deck(
+            self.repo.db_path, self.combo_id, self.home_cb.currentData()
+        )
+        # Listentext sofort nachziehen; faellt die Kombo damit aus dem
+        # aktiven Filter, raeumt erst der naechste refresh() auf.
+        self._update_current_label()
+
     def _on_piece_selected(self, current: QListWidgetItem, _previous=None) -> None:
         # Rollen-Dropdown auf den gewählten Baustein stellen, ohne dabei
         # ein Speichern auszulösen.
@@ -1428,7 +1603,12 @@ class ComboView(QWidget):
             return
         name, ok = QInputDialog.getText(self, "Neue Kombo", "Name der Kombo:")
         if ok and name.strip():
-            combo_id = ydb.create_combo(self.repo.db_path, name.strip())
+            # Ist der Filter auf ein Deck gestellt, wird es direkt Heimat-Deck
+            # (sonst waere die neue Kombo im Filter unsichtbar).
+            deck_id = self.deck_filter_cb.currentData() or None
+            combo_id = ydb.create_combo(
+                self.repo.db_path, name.strip(), deck_id=deck_id
+            )
             self.refresh()
             self._select_combo(combo_id)
 
@@ -1440,15 +1620,30 @@ class ComboView(QWidget):
             f"Kombo '{self.name_edit.text()}' löschen?",
         )
         if reply == QMessageBox.StandardButton.Yes:
+            # Offene Eingaben verwerfen -- sie gehoeren zur geloeschten Kombo.
+            self._save_timer.stop()
+            self._dirty_combo_id = None
             ydb.delete_combo(self.repo.db_path, self.combo_id)
             self.combo_id = None
             self.refresh()
 
-    def _save(self) -> None:
-        if self.combo_id is None:
+    # -- Auto-Speichern (Name/Archetyp/Schritte) ------------------------------
+
+    def _on_editor_changed(self, *_args) -> None:
+        if self._loading or self.combo_id is None:
             return
+        self._dirty_combo_id = self.combo_id
+        self._save_timer.start()
+
+    def flush_pending(self) -> None:
+        """Sichert offene Editor-Eingaben. Wird vom Timer, vor jedem Laden
+        einer anderen Kombo und beim Schliessen des Fensters aufgerufen."""
+        self._save_timer.stop()
+        if self._dirty_combo_id is None:
+            return
+        combo_id, self._dirty_combo_id = self._dirty_combo_id, None
         ydb.update_combo(
-            self.repo.db_path, self.combo_id,
+            self.repo.db_path, combo_id,
             name=self.name_edit.text().strip() or "Unbenannt",
             archetype=self.arch_edit.text().strip() or None,
         )
@@ -1456,9 +1651,16 @@ class ComboView(QWidget):
             ln.strip() for ln in self.steps_edit.toPlainText().splitlines()
             if ln.strip()
         ]
-        ydb.set_combo_steps(self.repo.db_path, self.combo_id, lines)
-        self.refresh()
-        self._select_combo(self.combo_id)
+        ydb.set_combo_steps(self.repo.db_path, combo_id, lines)
+        # Listentext nachziehen (Name/Archetyp koennen sich geaendert haben);
+        # nicht ueber currentItem, denn die Auswahl kann schon weiter sein.
+        for i in range(self.combo_list.count()):
+            item = self.combo_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == combo_id:
+                combo = ydb.get_combo(self.repo.db_path, combo_id)
+                if combo is not None:
+                    item.setText(self._combo_label(combo))
+                break
 
     def _adjust_piece(self, delta: int) -> None:
         item = self.pieces.currentItem()
@@ -1483,6 +1685,20 @@ class ComboView(QWidget):
             return
         card_id = item.data(Qt.ItemDataRole.UserRole)
         ydb.remove_combo_card(self.repo.db_path, self.combo_id, card_id)
+        self._after_piece_change()
+
+    def _add_piece_dialog(self) -> None:
+        """Baustein direkt hier suchen und hinzufügen (ohne Tab-Wechsel)."""
+        if self.combo_id is None:
+            return
+        dlg = CardSearchDialog(self.repo, self)
+        dlg.setWindowTitle("Baustein hinzufügen")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        card_id = dlg.chosen_card_id()
+        if card_id is None:
+            return
+        ydb.add_combo_card(self.repo.db_path, self.combo_id, card_id, 1)
         self._after_piece_change()
 
     # -- von aussen (Detailansicht der Suche) -------------------------------
@@ -1533,6 +1749,8 @@ class MainWindow(QMainWindow):
         # Detailansicht -> aktives Deck bzw. aktive Kombo
         self.detail.add_to_deck_callback = self.deck_view.add_card
         self.detail.add_to_combo_callback = self.combo_view.add_piece
+        # Deck-Tab -> neue Kombo im Kombos-Tab oeffnen
+        self.deck_view.open_combo_callback = self._open_combo
 
         self.tabs = QTabWidget()
         self.tabs.addTab(splitter, "Suche")
@@ -1677,6 +1895,17 @@ class MainWindow(QMainWindow):
             self.deck_view.refresh()
         elif widget is self.combo_view:
             self.combo_view.refresh()
+
+    def _open_combo(self, combo_id: int) -> None:
+        """Aus dem Deck-Tab: in den Kombos-Tab wechseln und die Kombo zeigen."""
+        self.tabs.setCurrentWidget(self.combo_view)
+        self.combo_view.focus_combo(combo_id)
+
+    def closeEvent(self, event) -> None:
+        # Noch nicht gespeicherte Kombo-Eingaben sichern (Auto-Save-Timer
+        # koennte sonst verfallen).
+        self.combo_view.flush_pending()
+        super().closeEvent(event)
 
 
 def main() -> None:

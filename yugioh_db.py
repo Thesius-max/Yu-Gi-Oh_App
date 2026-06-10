@@ -202,7 +202,10 @@ CREATE TABLE IF NOT EXISTS combos (
     name         TEXT NOT NULL,
     archetype    TEXT,
     notes        TEXT,
-    boss_card_id INTEGER REFERENCES cards(id)   -- Zielmonster der Kombo (optional)
+    boss_card_id INTEGER REFERENCES cards(id),  -- Zielmonster der Kombo (optional)
+    -- Heimat-Deck: nur eine Verknuepfung (Filter/Komfort), KEIN Besitz --
+    -- jede Kombo bleibt gegen jedes Deck abgleichbar (Bibliothek-Prinzip).
+    deck_id      INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS combo_cards (
@@ -236,6 +239,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("cards", "name_de", "TEXT"),
         ("cards", "desc_de", "TEXT"),
         ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
+        ("combos", "deck_id", "INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL"),
         ("combo_cards", "role", "TEXT"),
     ):
         try:
@@ -1004,11 +1008,15 @@ MAX_COMBO_PIECE = 3  # mehr als 3 Kopien je Karte sind ohnehin nicht spielbar
 COMBO_ROLES = ("starter", "extender", "payoff", "handtrap")
 
 
-def create_combo(db_path: str, name: str, archetype: Optional[str] = None) -> int:
+def create_combo(
+    db_path: str, name: str, archetype: Optional[str] = None,
+    deck_id: Optional[int] = None,
+) -> int:
     conn = _connect(db_path)
     try:
         cur = conn.execute(
-            "INSERT INTO combos (name, archetype) VALUES (?,?)", (name, archetype)
+            "INSERT INTO combos (name, archetype, deck_id) VALUES (?,?,?)",
+            (name, archetype, deck_id),
         )
         conn.commit()
         return cur.lastrowid
@@ -1016,12 +1024,22 @@ def create_combo(db_path: str, name: str, archetype: Optional[str] = None) -> in
         conn.close()
 
 
-def list_combos(db_path: str) -> list[sqlite3.Row]:
+def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row]:
+    """Alle Kombos, optional nach Heimat-Deck gefiltert:
+    deck_id=None -> alle, deck_id=0 -> nur ohne Heimat-Deck, sonst das Deck."""
+    sql = """SELECT cb.combo_id, cb.name, cb.archetype, cb.deck_id,
+                    d.name AS deck_name
+             FROM combos cb LEFT JOIN decks d ON d.deck_id = cb.deck_id"""
+    args: tuple = ()
+    if deck_id == 0:
+        sql += " WHERE cb.deck_id IS NULL"
+    elif deck_id is not None:
+        sql += " WHERE cb.deck_id = ?"
+        args = (deck_id,)
+    sql += " ORDER BY cb.name"
     conn = _connect(db_path)
     try:
-        return conn.execute(
-            "SELECT combo_id, name, archetype FROM combos ORDER BY name"
-        ).fetchall()
+        return conn.execute(sql, args).fetchall()
     finally:
         conn.close()
 
@@ -1031,11 +1049,27 @@ def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
     try:
         return conn.execute(
             """SELECT cb.combo_id, cb.name, cb.archetype, cb.notes,
-                      cb.boss_card_id, b.name AS boss_name
-               FROM combos cb LEFT JOIN cards b ON b.id = cb.boss_card_id
+                      cb.boss_card_id, b.name AS boss_name,
+                      cb.deck_id, d.name AS deck_name
+               FROM combos cb
+               LEFT JOIN cards b ON b.id = cb.boss_card_id
+               LEFT JOIN decks d ON d.deck_id = cb.deck_id
                WHERE cb.combo_id = ?""",
             (combo_id,),
         ).fetchone()
+    finally:
+        conn.close()
+
+
+def set_combo_deck(db_path: str, combo_id: int, deck_id: Optional[int]) -> None:
+    """Setzt das Heimat-Deck einer Kombo; None entfernt die Verknuepfung."""
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE combos SET deck_id = ? WHERE combo_id = ?",
+            (deck_id, combo_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
