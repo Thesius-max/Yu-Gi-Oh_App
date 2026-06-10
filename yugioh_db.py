@@ -391,22 +391,26 @@ def build_database(
         conn.close()
 
 
-def needs_update(db_path: str = DEFAULT_DB) -> bool:
-    """True, wenn die API eine neuere DB-Version meldet als lokal gespeichert."""
-    remote = fetch_db_version()
-    if remote is None:
-        return False
+def local_db_version(db_path: str = DEFAULT_DB) -> Optional[str]:
+    """Lokal gespeicherte Datenbankversion (None, wenn unbekannt)."""
     conn = _connect(db_path)
     try:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='db_version';"
         ).fetchone()
-        local = row["value"] if row else None
+        return row["value"] if row else None
     except sqlite3.OperationalError:
-        return False
+        return None
     finally:
         conn.close()
-    return remote != local
+
+
+def needs_update(db_path: str = DEFAULT_DB) -> bool:
+    """True, wenn die API eine neuere DB-Version meldet als lokal gespeichert."""
+    remote = fetch_db_version()
+    if remote is None:
+        return False
+    return remote != local_db_version(db_path)
 
 
 # ---------------------------------------------------------------------------

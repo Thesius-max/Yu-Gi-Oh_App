@@ -24,6 +24,7 @@ Aufbau (drei Spalten, frei skalierbar via Splitter):
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
@@ -33,8 +34,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
-    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QProgressDialog, QPushButton, QSpinBox, QSplitter, QTableWidget,
+    QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 import yugioh_db as ydb
@@ -75,6 +76,36 @@ class _ImageLoader(QRunnable):
                 self._signals.failed.emit(self._card_id)
             except RuntimeError:
                 pass
+
+
+class _DbTaskSignals(QObject):
+    done = Signal(object)
+    failed = Signal(str)
+
+
+class _DbTask(QRunnable):
+    """Fuehrt eine laengere DB-/Netzwerkfunktion abseits des UI-Threads aus
+    (z.B. das Kartendaten-Update); Ergebnis kommt per Signal zurueck."""
+
+    def __init__(self, fn, signals: _DbTaskSignals):
+        super().__init__()
+        self._fn = fn
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            result = self._fn()
+        except Exception as exc:
+            try:
+                self._signals.failed.emit(str(exc))
+            except RuntimeError:
+                pass
+            return
+        try:
+            self._signals.done.emit(result)
+        except RuntimeError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1923,6 +1954,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.combo_view, "Kombos")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
+        self._build_data_menu()
 
         if self.repo.exists():
             self._populate_filters()
@@ -1930,14 +1962,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Datenbank fehlt",
                 "Die mitgelieferte Kartendatenbank konnte nicht angelegt werden.\n\n"
-                "Bitte die Anwendung neu installieren oder den Entwickler "
-                "informieren.",
+                "Mit Internetverbindung lässt sie sich über das Menü\n"
+                "'Daten → Kartendaten aktualisieren' herunterladen.",
             )
         else:
             QMessageBox.information(
                 self, "Datenbank fehlt",
                 "Keine Datenbank gefunden.\n\n"
-                "Bitte zuerst anlegen:\n    python yugioh_db.py build",
+                "Anlegen über das Menü 'Daten → Kartendaten aktualisieren'\n"
+                "oder per Kommandozeile:  python yugioh_db.py build",
             )
         self._loading = False
         self.search()
@@ -2064,6 +2097,135 @@ class MainWindow(QMainWindow):
         # koennte sonst verfallen).
         self.combo_view.flush_pending()
         super().closeEvent(event)
+
+    # -- Kartendaten-Update (Menü 'Daten') ------------------------------------
+
+    def _build_data_menu(self) -> None:
+        menu = self.menuBar().addMenu("Daten")
+        self._check_action = menu.addAction("Auf Updates prüfen")
+        self._check_action.triggered.connect(self._check_for_update)
+        self._update_action = menu.addAction("Kartendaten aktualisieren…")
+        self._update_action.triggered.connect(self._start_update)
+
+    def _set_data_actions_enabled(self, on: bool) -> None:
+        self._check_action.setEnabled(on)
+        self._update_action.setEnabled(on)
+
+    def _check_for_update(self) -> None:
+        """Billige Versionsabfrage (ein Mini-Request), im Hintergrund, damit
+        ein totes Netz die Oberfläche nicht blockiert."""
+        self._set_data_actions_enabled(False)
+        self._check_signals = _DbTaskSignals()
+        self._check_signals.done.connect(self._on_check_done)
+        self._check_signals.failed.connect(lambda _msg: self._on_check_done(None))
+        QThreadPool.globalInstance().start(
+            _DbTask(ydb.fetch_db_version, self._check_signals)
+        )
+
+    def _on_check_done(self, remote) -> None:
+        self._set_data_actions_enabled(True)
+        if not remote:
+            QMessageBox.warning(
+                self, "Auf Updates prüfen",
+                "Keine Antwort von der YGOPRODeck-API.\n"
+                "Besteht eine Internetverbindung?",
+            )
+            return
+        local = (
+            ydb.local_db_version(self.repo.db_path)
+            if self.repo.exists() else None
+        )
+        if local == remote:
+            QMessageBox.information(
+                self, "Auf Updates prüfen",
+                f"Die Kartendaten sind aktuell (Version {remote}).",
+            )
+            return
+        reply = QMessageBox.question(
+            self, "Auf Updates prüfen",
+            f"Neue Kartendaten verfügbar (lokal: {local or 'unbekannt'}, "
+            f"online: {remote}).\n\nJetzt aktualisieren?",
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._start_update(confirmed=True)
+
+    def _start_update(self, confirmed: bool = False) -> None:
+        """Laedt alle Kartendaten neu. Benutzerdaten (Sammlung, Decks, Kombos,
+        eigene Übersetzungen) bleiben unberührt: build_database arbeitet per
+        UPSERT ohne DELETE auf cards und wendet Übersetzungs-Overrides nach
+        dem Update wieder an. Vorher wird eine .bak-Sicherung angelegt."""
+        if not confirmed:
+            reply = QMessageBox.question(
+                self, "Kartendaten aktualisieren",
+                "Alle Kartendaten von der YGOPRODeck-API herunterladen?\n\n"
+                "Eigene Daten (Sammlung, Decks, Kombos, eigene Übersetzungen) "
+                "bleiben erhalten.",
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if os.path.exists(self.repo.db_path):
+            try:
+                shutil.copy(self.repo.db_path, self.repo.db_path + ".bak")
+            except OSError as exc:
+                QMessageBox.warning(
+                    self, "Kartendaten aktualisieren",
+                    f"Sicherungskopie fehlgeschlagen ({exc}).\n"
+                    "Update abgebrochen.",
+                )
+                return
+        self._set_data_actions_enabled(False)
+        self._progress = QProgressDialog(
+            "Lade Kartendaten von der YGOPRODeck-API …", "", 0, 0, self
+        )
+        self._progress.setCancelButton(None)  # mitten im Schreiben kein Abbruch
+        self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self._progress.setWindowTitle("Aktualisierung")
+        self._progress.setMinimumDuration(0)
+        self._progress.show()
+        self._update_signals = _DbTaskSignals()
+        self._update_signals.done.connect(self._on_update_done)
+        self._update_signals.failed.connect(self._on_update_failed)
+        db_path = self.repo.db_path
+        QThreadPool.globalInstance().start(
+            _DbTask(lambda: ydb.build_database(db_path), self._update_signals)
+        )
+
+    def _on_update_done(self, count) -> None:
+        self._progress.close()
+        self._set_data_actions_enabled(True)
+        self._refresh_all()
+        version = ydb.local_db_version(self.repo.db_path) or "unbekannt"
+        QMessageBox.information(
+            self, "Aktualisierung",
+            f"{count} Karten aktualisiert (Datenbank-Version {version}).",
+        )
+
+    def _on_update_failed(self, msg: str) -> None:
+        self._progress.close()
+        self._set_data_actions_enabled(True)
+        QMessageBox.warning(
+            self, "Aktualisierung fehlgeschlagen",
+            f"{msg}\n\nDie Datenbank wurde nicht verändert; zur Not liegt "
+            f"eine Sicherung neben ihr ({os.path.basename(self.repo.db_path)}"
+            ".bak).",
+        )
+
+    def _refresh_all(self) -> None:
+        """Nach einem Daten-Update: Such-Filter neu befüllen (neue Archetypen
+        usw.) und alle Views neu laden."""
+        self._loading = True
+        for cb in (self.type_cb, self.attr_cb, self.arch_cb):
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("(alle)", None)
+            cb.blockSignals(False)
+        if self.repo.exists():
+            self._populate_filters()
+        self._loading = False
+        self.search()
+        self.collection_view.refresh()
+        self.deck_view.refresh()
+        self.combo_view.refresh()
 
 
 def main() -> None:
