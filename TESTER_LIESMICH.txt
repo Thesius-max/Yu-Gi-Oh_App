@@ -22,6 +22,10 @@ WAS BEIM ERSTEN START PASSIERT
 - Kartenbilder werden bei Bedarf einmalig aus dem Internet geladen
   und lokal gespeichert. Fuer Bilder ist also eine Internetverbindung
   noetig; ohne Internet laeuft alles ausser den Bildern.
+- Neue Karten erscheinen regelmaessig: Ueber das Menue
+  "Daten -> Kartendaten aktualisieren" laedt die App die aktuelle
+  Kartenliste nach. Eure Sammlung, Decks und Kombos bleiben dabei
+  erhalten (vorher wird automatisch eine Sicherung angelegt).
 
 ----------------------------------------------------------
 WO LIEGEN MEINE DATEN

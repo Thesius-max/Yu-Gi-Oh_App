@@ -10,17 +10,31 @@ einer SQLite-Datenbank gespeichert. Danach läuft die Anwendung offline.
 
 ## Funktionen
 
-- **Suche** – Volltextsuche über Kartenname und Kartentext sowie Filter nach
-  Typ, Attribut, Archetyp, Level/Rank und ATK-Bereich. Detailansicht mit Bild,
-  Werten und Kartentext.
+- **Suche** – Volltextsuche über Kartenname und Kartentext (deutsch und
+  englisch) sowie Filter nach Typ, Attribut, Archetyp, Level/Rank und
+  ATK-Bereich, optional begrenzt auf die eigene Sammlung. Detailansicht mit
+  Bild, Werten und Kartentext; fehlende deutsche Übersetzungen lassen sich
+  über „✎ DE" selbst ergänzen und überleben Daten-Updates.
 - **Sammlung** – eigener Bestand getrennt von der Kartenreferenz, mit Menge,
-  Set, Edition, Zustand und Sprache. Identische Drucke werden zusammengeführt.
+  Set, Edition, Zustand und Sprache. Identische Drucke werden zusammengeführt,
+  die Liste ist nach Monster/Zauber/Falle gruppiert und per Namenssuche,
+  Klasse, Attribut und Archetyp filterbar.
 - **Deck** – Main-, Extra- und Side-Deck mit automatischer Zonenzuordnung
   (Fusion/Synchro/Xyz/Link → Extra Deck), 3-Kopien-Regel und Live-Validierung
-  (Main 40–60, Extra/Side je max. 15).
-- **Kombos** – eigene Kombo-Guides aus Bausteinen (Karten) und Schritten.
-  Im Deck-Tab zeigt die Kombo-Hilfe pro Deck die Abdeckung jeder Kombo und
-  ergänzt fehlende Bausteine auf Knopfdruck in der richtigen Zone.
+  (Main 40–60, Extra/Side je max. 15). Decks lassen sich im `.ydk`-Format
+  importieren und exportieren (YGOPro-kompatibel). Der Abgleich mit der
+  Sammlung warnt, wenn mehr Kopien verplant sind als physisch vorhanden –
+  Kopien in anderen Decks zählen dabei als gebunden.
+- **Kombos** – eigene Kombo-Guides aus Bausteinen (Karten) und Schritten,
+  mit Rolle je Baustein (Starter/Extender/Payoff/Handtrap), Boss-Zielmonster
+  und optionalem Heimat-Deck. Neue Kombos entstehen direkt aus den Karten
+  eines Decks („Neue Kombo aus diesem Deck…"); Eingaben speichern
+  automatisch. Die Kombo-Hilfe im Deck-Tab zeigt Abdeckung, Schritte, einen
+  Deck-Fahrplan (Rollen-Übersicht, Linien je Boss) und exakte
+  Starthand-Wahrscheinlichkeiten (≥1 Starter, ≥1 Handtrap, Brick-Quote).
+- **Daten-Update** – Menü „Daten" prüft auf neue Kartendaten und lädt sie
+  auf Wunsch nach. Eigene Daten (Sammlung, Decks, Kombos, Übersetzungen)
+  bleiben dabei erhalten; vorher wird automatisch eine Sicherung angelegt.
 
 ## Voraussetzungen
 
@@ -33,8 +47,8 @@ die Python-Standardbibliothek.
 ## Installation
 
 ```bash
-git clone https://github.com/<dein-name>/yugioh-sammlung.git
-cd yugioh-sammlung
+git clone https://github.com/Thesius-max/Yu-Gi-Oh_App.git
+cd Yu-Gi-Oh_App
 pip install -r requirements.txt
 ```
 
@@ -50,18 +64,24 @@ python yugioh_gui.py
 
 `build` legt die Datei `yugioh.sqlite3` im aktuellen Verzeichnis an. Mit
 `python yugioh_db.py check` lässt sich später günstig prüfen, ob die API eine
-neuere Datenbankversion bereitstellt.
+neuere Datenbankversion bereitstellt. Beides geht alternativ direkt in der
+App über das Menü **„Daten"** – auch die Erstanlage, falls noch keine
+Datenbank existiert.
 
 ## Bedienung in Kürze
 
 - In **Suche** eine Karte finden und auswählen. In der Detailansicht lässt sie
   sich zur Sammlung, zum aktiven Deck (`+ Deck` / `+ Side`) oder als Baustein
   zur aktiven Kombo hinzufügen.
-- Im **Deck**-Tab oben ein Deck anlegen/auswählen. Mengen über `−1`/`+1`
-  ändern, Karten zwischen Zonen verschieben, und rechts über die Kombo-Hilfe
-  fehlende Bausteine ergänzen.
-- Im **Kombos**-Tab eine Kombo anlegen, ihre Bausteine pflegen und die
-  Schritte erfassen (eine Zeile pro Schritt).
+- Im **Deck**-Tab oben ein Deck anlegen/auswählen oder eine `.ydk`-Datei
+  importieren. Mengen über `−1`/`+1` ändern, Karten zwischen Zonen
+  verschieben; rechts hilft die Kombo-Hilfe mit Abdeckung, Fahrplan und
+  Konsistenz-Werten und ergänzt fehlende Bausteine auf Knopfdruck.
+- Im **Kombos**-Tab Kombos pflegen: Bausteine über „+ Baustein…" suchen,
+  je Baustein eine Rolle vergeben, Boss und Heimat-Deck wählen, Schritte
+  erfassen (eine Zeile pro Schritt). Name, Archetyp und Schritte speichern
+  automatisch. Am schnellsten startet eine Kombo aus dem Deck-Tab heraus
+  („Neue Kombo aus diesem Deck…").
 
 ## Verteilbares Bundle bauen (für Tester)
 
@@ -88,11 +108,12 @@ beiden Plattformen identisch.
 ## Projektstruktur
 
 ```
-yugioh_db.py     Datenschicht: API-Abruf, SQLite-Schema, Suche, Sammlung,
-                 Decks und Kombos (nur Standardbibliothek)
-yugioh_gui.py    PySide6-Oberfläche mit den vier Tabs
-build_app.py     Erzeugt das verteilbare PyInstaller-Bundle
-requirements.txt Abhängigkeiten
+yugioh_db.py         Datenschicht: API-Abruf, SQLite-Schema, Suche, Sammlung,
+                     Decks und Kombos (nur Standardbibliothek)
+yugioh_gui.py        PySide6-Oberfläche mit den vier Tabs
+build_app.py         Erzeugt das verteilbare PyInstaller-Bundle
+TESTER_LIESMICH.txt  Anleitung, die mit ins Tester-Bundle gelegt wird
+requirements.txt     Abhängigkeiten
 ```
 
 Die Anwendung erzeugt zur Laufzeit `yugioh.sqlite3` (Datenbank) und einen
@@ -110,11 +131,13 @@ Ordner `card_images/` (lokal zwischengespeicherte Kartenbilder). Beide sind
 
 ## Bekannte Einschränkungen / Ideen
 
-- Kartenbilder werden beim ersten Auswählen synchron geladen (kurze
-  Verzögerung); eine Auslagerung in einen Worker-Thread steht noch aus.
+- Kombo-Linien werden bewusst nicht aus dem Kartentext hergeleitet – Kombos
+  sind benutzergepflegt, die App liefert Struktur und Mathematik drumherum.
 - Die Trefferliste zeigt Text statt Thumbnails.
-- Mögliche Erweiterungen: Bann-Listen-Auswertung, `.ydk`-Im-/Export, Anzeige
-  der Kombo-Schritte im Deck-Tab, Abgleich der Kombos gegen die Sammlung.
+- Geplante Erweiterungen: Kartenvorschläge über einen Synergie-Graphen aus
+  der Kombo-Bibliothek, Referenz-Deck-Korpus (`.ydk`-Import vorhanden) mit
+  Co-Occurrence-Statistik, Varianten/Verzweigungen für Kombos (z.B. nach
+  einer Interruption).
 
 ## Lizenz
 
