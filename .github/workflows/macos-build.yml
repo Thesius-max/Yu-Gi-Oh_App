@@ -1,0 +1,63 @@
+# Baut das macOS-Bundle (.app) auf einem GitHub-Runner -- PyInstaller kann
+# nicht cross-kompilieren, und ein eigener Mac steht nicht zur Verfuegung.
+#
+# Ausloeser:
+#   - manuell ueber den Actions-Tab ("Run workflow") -> Ergebnis als Artefakt
+#     (Download erfordert GitHub-Login; ZIP dann selbst weitergeben)
+#   - Git-Tag "v*" (z.B. v0.2) -> ZIP haengt zusaetzlich am GitHub-Release
+#     und ist OHNE Login oeffentlich herunterladbar
+#
+# Hinweis: Der Runner ist Apple Silicon (arm64) -- passt fuer MacBooks ab
+# ca. 2021. Fuer aeltere Intel-Macs braeuchte es einen Intel-Runner
+# (macos-13, sofern von GitHub noch angeboten).
+
+name: macOS-Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # fuer das Anhaengen ans Release bei Tag-Builds
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhaengigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Seed-Datenbank erzeugen (YGOPRODeck-API)
+        run: python yugioh_db.py build seed.sqlite3
+
+      - name: App bauen
+        run: python build_app.py
+
+      - name: Bundle paketieren (.app + Anleitung)
+        # Eigenes ditto-Zip statt nur upload-artifact: das Artefakt-Zippen
+        # von GitHub verwirft Ausfuehrungsrechte, dann startet die .app nicht.
+        run: |
+          mkdir -p out/YugiohSammlung-macos
+          cp -R dist/YugiohSammlung.app out/YugiohSammlung-macos/
+          cp TESTER_LIESMICH.txt out/YugiohSammlung-macos/
+          ditto -c -k --keepParent out/YugiohSammlung-macos YugiohSammlung-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YugiohSammlung-macos-arm64
+          path: YugiohSammlung-macos-arm64.zip
+
+      - name: Ans Release anhaengen (nur bei Tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: YugiohSammlung-macos-arm64.zip

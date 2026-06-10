@@ -105,6 +105,13 @@ Datenort und Feedback-Weg.
 auf Windows, ein macOS-`.app` auf einem Mac erzeugt werden. Das Skript läuft auf
 beiden Plattformen identisch.
 
+Ohne eigenen Mac übernimmt das der GitHub-Actions-Workflow **macOS-Build**
+(`.github/workflows/macos-build.yml`): manuell über den Actions-Tab startbar
+(Ergebnis als Artefakt) oder automatisch bei einem Git-Tag `v*` – dann hängt
+das ZIP öffentlich am GitHub-Release. Gebaut wird für Apple Silicon (arm64,
+MacBooks ab ca. 2021). Der erste Start der unsignierten App erfordert
+Rechtsklick → „Öffnen" (Details in `TESTER_LIESMICH.txt`).
+
 ## Projektstruktur
 
 ```

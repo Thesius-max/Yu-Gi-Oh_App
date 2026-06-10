@@ -16,6 +16,22 @@ weil die App nicht signiert ist:
    -> "Weitere Informationen"  ->  "Trotzdem ausfuehren"
 
 ----------------------------------------------------------
+STARTEN (macOS)
+----------------------------------------------------------
+1. ZIP entpacken und  YugiohSammlung.app  z.B. in den Ordner
+   "Programme" ziehen.
+2. Beim ersten Start blockiert macOS unsignierte Apps:
+   Rechtsklick auf die App -> "Oeffnen" -> "Oeffnen".
+   Alternativ: Systemeinstellungen -> Datenschutz & Sicherheit
+   -> "Dennoch oeffnen".
+3. Falls macOS meldet, die App sei "beschaedigt": Terminal oeffnen
+   (Programme -> Dienstprogramme) und eingeben:
+      xattr -cr /Applications/YugiohSammlung.app
+   (Pfad anpassen, falls die App woanders liegt.)
+Das ist normal fuer eine unsignierte Test-Version -- die App ist
+nicht defekt, macOS markiert nur Downloads ohne Apple-Signatur.
+
+----------------------------------------------------------
 WAS BEIM ERSTEN START PASSIERT
 ----------------------------------------------------------
 - Die Kartendatenbank ist bereits enthalten (offline nutzbar).
@@ -31,8 +47,9 @@ WAS BEIM ERSTEN START PASSIERT
 WO LIEGEN MEINE DATEN
 ----------------------------------------------------------
 Sammlung, Decks und Kombos werden hier gespeichert:
-   %LOCALAPPDATA%\YugiohSammlung\
-   (z.B. C:\Users\<DeinName>\AppData\Local\YugiohSammlung\)
+   Windows:  %LOCALAPPDATA%\YugiohSammlung\
+             (z.B. C:\Users\<DeinName>\AppData\Local\YugiohSammlung\)
+   macOS:    ~/Library/Application Support/YugiohSammlung/
 
 Diese Daten bleiben bei einem Update der App erhalten. Zum komplett
 "frischen" Zuruecksetzen einfach diesen Ordner loeschen.
