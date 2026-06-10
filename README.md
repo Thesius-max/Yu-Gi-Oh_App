@@ -107,10 +107,12 @@ beiden Plattformen identisch.
 
 Ohne eigenen Mac übernimmt das der GitHub-Actions-Workflow **macOS-Build**
 (`.github/workflows/macos-build.yml`): manuell über den Actions-Tab startbar
-(Ergebnis als Artefakt) oder automatisch bei einem Git-Tag `v*` – dann hängt
-das ZIP öffentlich am GitHub-Release. Gebaut wird für Apple Silicon (arm64,
-MacBooks ab ca. 2021). Der erste Start der unsignierten App erfordert
-Rechtsklick → „Öffnen" (Details in `TESTER_LIESMICH.txt`).
+(Ergebnis als Artefakt) oder automatisch bei einem Git-Tag `v*` – dann hängen
+die ZIPs öffentlich am GitHub-Release. Gebaut werden zwei Varianten:
+**arm64** für Apple Silicon (MacBooks ab ca. 2021) und **x86_64** für ältere
+Intel-Macs (GitHubs Intel-Runner existiert noch bis August 2027). Der erste
+Start der unsignierten App erfordert Rechtsklick → „Öffnen" (Details in
+`TESTER_LIESMICH.txt`).
 
 ## Projektstruktur
 

@@ -18,6 +18,9 @@ weil die App nicht signiert ist:
 ----------------------------------------------------------
 STARTEN (macOS)
 ----------------------------------------------------------
+0. Das passende ZIP waehlen: "...-arm64.zip" fuer Macs mit
+   Apple-Chip (M1/M2/M3/..., ab ca. 2021), "...-x86_64.zip" fuer
+   aeltere Intel-Macs. (Nachschauen:  -> "Ueber diesen Mac")
 1. ZIP entpacken und  YugiohSammlung.app  z.B. in den Ordner
    "Programme" ziehen.
 2. Beim ersten Start blockiert macOS unsignierte Apps:
