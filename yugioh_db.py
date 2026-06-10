@@ -21,9 +21,11 @@ anzeigen will, laedt sie einmal herunter und legt sie lokal ab
 
 from __future__ import annotations
 
+import datetime
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -1185,6 +1187,59 @@ MAX_COMBO_PIECE = 3  # mehr als 3 Kopien je Karte sind ohnehin nicht spielbar
 # eine andere Rolle haben). NULL = noch nicht eingestuft.
 COMBO_ROLES = ("starter", "extender", "payoff", "handtrap")
 
+# Verbindliche Notation fuer Kombo-Schritte (siehe KOMBO-NOTATION.md):
+#   <AKTION> <Karte> (<Quelle>) [Req: <Bedingung>] -> <Folge> | Lock: <Lock>
+# Erlaubte Aktions-Keywords am Zeilenanfang:
+COMBO_STEP_KEYWORDS = (
+    "NS", "SS", "Act", "Eff", "Eff1", "Eff2", "Add", "Send", "Banish",
+    "Mill", "Draw", "Discard", "Set", "Synchro:",
+)
+
+
+def lint_combo_steps(steps: Iterable[str]) -> list[str]:
+    """Prueft Schritte gegen die Kombo-Notation und liefert Warnungen
+    (leer = konform). Bewusst tolerant und nur beratend -- die App warnt,
+    blockiert aber nie."""
+    allowed = {k.rstrip(":").lower() for k in COMBO_STEP_KEYWORDS}
+    warnings: list[str] = []
+    for no, text in enumerate(steps, start=1):
+        problems: list[str] = []
+        tokens = text.split()
+        first = tokens[0].rstrip(":").lower() if tokens else ""
+        if first not in allowed:
+            problems.append(
+                "beginnt nicht mit einem Notation-Keyword "
+                "(NS, SS, Act, Eff/Eff1/Eff2, Add, Send, Banish, Mill, "
+                "Draw, Discard, Set, Synchro:)"
+            )
+        head, *locks = (seg.strip() for seg in text.split("|"))
+        for seg in locks:
+            if not seg.lower().startswith("lock:"):
+                problems.append("nach '|' fehlt das 'Lock:'-Praefix")
+        if text.count("[") != text.count("]"):
+            problems.append("eckige Klammer nicht geschlossen")
+        else:
+            for inner in re.findall(r"\[([^\]]*)\]", text):
+                if not inner.strip().lower().startswith("req:"):
+                    problems.append(
+                        "eckige Klammern sind fuer Bedingungen "
+                        "reserviert: [Req: ...]"
+                    )
+        lowered = head.lower()
+        if lowered.startswith("synchro:"):
+            if "+" not in head or "->" not in head:
+                problems.append(
+                    "Formel unvollstaendig -- erwartet: "
+                    "Synchro: Tuner (Lvl) + Non-Tuner (Lvl) -> Ziel (Lvl)"
+                )
+        elif "synchro:" in lowered:
+            problems.append(
+                "Beschwoerungsformeln ('Synchro: ...') bekommen eine "
+                "eigene Zeile"
+            )
+        warnings.extend(f"Schritt {no}: {p}" for p in problems)
+    return warnings
+
 
 def create_combo(
     db_path: str, name: str, archetype: Optional[str] = None,
@@ -1253,13 +1308,15 @@ def set_combo_deck(db_path: str, combo_id: int, deck_id: Optional[int]) -> None:
 
 
 def update_combo(
-    db_path: str, combo_id: int, name: str, archetype: Optional[str] = None
+    db_path: str, combo_id: int, name: str, archetype: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> None:
     conn = _connect(db_path)
     try:
         conn.execute(
-            "UPDATE combos SET name = ?, archetype = ? WHERE combo_id = ?",
-            (name, archetype, combo_id),
+            "UPDATE combos SET name = ?, archetype = ?, notes = ?"
+            " WHERE combo_id = ?",
+            (name, archetype, notes, combo_id),
         )
         conn.commit()
     finally:
@@ -1613,6 +1670,114 @@ def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
         return {r["role"]: int(r["n"]) for r in rows}
     finally:
         conn.close()
+
+
+_ROLE_LABEL = {
+    "starter": "Starter", "extender": "Extender",
+    "payoff": "Payoff", "handtrap": "Handtrap",
+}
+
+
+def export_deck_combos_text(db_path: str, deck_id: int) -> str:
+    """Kombo-Linien eines Decks als lesbarer Text -- zum Weitergeben,
+    z.B. wenn ein erfahrener Spieler ueber Deck und Linien schauen soll.
+    Enthaelt Notation-Legende, Konsistenz, Rollen-Uebersicht und alle
+    Kombos, die mindestens einen Baustein im Deck haben oder dieses Deck
+    als Heimat-Deck fuehren (Reihenfolge wie im Deck-Tab: nach Abdeckung)."""
+    conn = _connect(db_path)
+    try:
+        deck = conn.execute(
+            "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if deck is None:
+        raise ValueError(f"Deck {deck_id} existiert nicht.")
+
+    def pct(p: float) -> str:
+        return f"{100 * p:.1f}".replace(".", ",") + " %"
+
+    lines = [
+        f"Kombo-Linien — {deck['name']}",
+        f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}",
+        "",
+        "Notation:  NS/SS = Normal/Special Summon · Act = Zauber/Falle"
+        " aktivieren ·",
+        "Eff1/Eff2 = (ersten/zweiten) Effekt aktivieren · Add = auf die"
+        " Hand (Suche) ·",
+        "GY = Friedhof · ED = Extra Deck · '->' verkettet Kosten/Wirkung/"
+        "Resultat ·",
+        "'| Lock: …' = Einschränkung · '[Req: …]' = Bedingung",
+    ]
+
+    stats = deck_consistency(db_path, deck_id)
+    if stats["deck_size"] and stats["roles"].get("starter"):
+        lines += ["", "== Konsistenz =="]
+        lines.append("Kopien im Main: " + " · ".join(
+            f"{_ROLE_LABEL[r]} {stats['roles'][r]}"
+            for r in COMBO_ROLES if stats["roles"].get(r)
+        ))
+        for hand, p in stats["hands"].items():
+            ln = f"Starthand {hand}: ≥1 Starter {pct(p['starter'])}"
+            if stats["roles"].get("handtrap"):
+                ln += f" · ≥1 Handtrap {pct(p['handtrap'])}"
+            lines.append(ln + f" · Brick {pct(p['brick'])}")
+
+    summary = deck_role_summary(db_path, deck_id)
+    if summary:
+        lines += ["", "== Rollen im Deck (Main + Extra) =="]
+        for role in COMBO_ROLES:
+            cards = summary.get(role)
+            if not cards:
+                continue
+            total = sum(c["copies"] for c in cards)
+            lines.append(f"{_ROLE_LABEL[role]} ({total}):")
+            lines += [f"  {c['copies']}x {c['name']}" for c in cards]
+
+    lines += ["", "== Kombo-Linien (nach Abdeckung im Deck) =="]
+    count = 0
+    for cb in combos_for_deck(db_path, deck_id):
+        combo = get_combo(db_path, cb["combo_id"])
+        if cb["covered"] == 0 and combo["deck_id"] != deck_id:
+            continue  # gehoert erkennbar nicht zu diesem Deck
+        count += 1
+        head = f"{count}) {combo['name']}"
+        if combo["archetype"]:
+            head += f"  [{combo['archetype']}]"
+        lines += ["", head]
+        info = []
+        if combo["boss_name"]:
+            info.append(f"Boss: {combo['boss_name']}")
+        info.append(f"Abdeckung: {cb['covered']}/{cb['total']} Bausteine im Deck")
+        lines.append("   " + " · ".join(info))
+        if combo["notes"]:
+            lines += [
+                f"   {ln.strip()}"
+                for ln in combo["notes"].splitlines() if ln.strip()
+            ]
+        cov = combo_coverage(db_path, cb["combo_id"], deck_id)
+        roles = {
+            p["card_id"]: p["role"] for p in combo_cards(db_path, cb["combo_id"])
+        }
+        if cov["pieces"]:
+            lines.append("   Bausteine:")
+        for p in cov["pieces"]:
+            role = roles.get(p["card_id"])
+            tag = f"  [{_ROLE_LABEL[role]}]" if role else ""
+            if p["missing"] == 0:
+                gap = ""
+            elif p["have"] == 0:
+                gap = "  (fehlt im Deck)"
+            else:
+                gap = f"  (nur {p['have']}/{p['needed']} im Deck)"
+            lines.append(f"     {p['needed']}x {p['name']}{tag}{gap}")
+        steps = combo_steps(db_path, cb["combo_id"])
+        if steps:
+            lines.append("   Schritte:")
+            lines += [f"     {s['step_no']}. {s['text']}" for s in steps]
+    if count == 0:
+        lines.append("(Keine Kombos mit Bausteinen aus diesem Deck erfasst.)")
+    return "\n".join(lines) + "\n"
 
 
 def deck_consistency(

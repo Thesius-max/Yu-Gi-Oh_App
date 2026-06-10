@@ -29,9 +29,15 @@ einer SQLite-Datenbank gespeichert. Danach läuft die Anwendung offline.
   mit Rolle je Baustein (Starter/Extender/Payoff/Handtrap), Boss-Zielmonster
   und optionalem Heimat-Deck. Neue Kombos entstehen direkt aus den Karten
   eines Decks („Neue Kombo aus diesem Deck…"); Eingaben speichern
-  automatisch. Die Kombo-Hilfe im Deck-Tab zeigt Abdeckung, Schritte, einen
+  automatisch. Schritte folgen einer festen Notation (siehe
+  `KOMBO-NOTATION.md`); der Editor zeigt sie über „Notation…" als
+  Kurzreferenz an und weist auf Abweichungen hin, ohne das Speichern zu
+  blockieren. Die Kombo-Hilfe im Deck-Tab zeigt Abdeckung, Schritte, einen
   Deck-Fahrplan (Rollen-Übersicht, Linien je Boss) und exakte
   Starthand-Wahrscheinlichkeiten (≥1 Starter, ≥1 Handtrap, Brick-Quote).
+  „Kombo-Linien exportieren…" speichert die Linien eines Decks als
+  `.txt` oder `.pdf` — z.B. um sie einem erfahrenen Spieler zum
+  Drüberschauen zu geben.
 - **Daten-Update** – Menü „Daten" prüft auf neue Kartendaten und lädt sie
   auf Wunsch nach. Eigene Daten (Sammlung, Decks, Kombos, Übersetzungen)
   bleiben dabei erhalten; vorher wird automatisch eine Sicherung angelegt.

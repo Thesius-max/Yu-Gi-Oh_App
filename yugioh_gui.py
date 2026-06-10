@@ -27,8 +27,13 @@ import os
 import shutil
 import sys
 
-from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QPixmap, QPixmapCache
+from PySide6.QtCore import (
+    Qt, QMarginsF, QObject, QRunnable, QThreadPool, QTimer, Signal,
+)
+from PySide6.QtGui import (
+    QColor, QFont, QImage, QPageLayout, QPageSize, QPdfWriter, QPixmap,
+    QPixmapCache, QTextDocument,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
@@ -1031,6 +1036,11 @@ class DeckView(QWidget):
         pv.addWidget(self.boss_lines, stretch=1)
         self.helper_tabs.addTab(plan_tab, "Fahrplan")
 
+        # Kombo-Linien als Datei weitergeben (z.B. an erfahrene Spieler).
+        export_combos_btn = QPushButton("Kombo-Linien exportieren…")
+        export_combos_btn.clicked.connect(self._export_combos)
+        cv.addWidget(export_combos_btn)
+
         main_split = QSplitter(Qt.Orientation.Horizontal)
         main_split.addWidget(zones_widget)
         main_split.addWidget(combo_box)
@@ -1193,6 +1203,54 @@ class DeckView(QWidget):
         self._refresh_consistency()
         self._refresh_plan()
         self._refresh_combos()
+
+    def _export_combos(self) -> None:
+        """Kombo-Linien des Decks als .txt oder .pdf speichern."""
+        if self.deck_id is None:
+            return
+        suggested = (self.deck_cb.currentText().strip() or "deck") + "-kombos"
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Kombo-Linien exportieren", suggested + ".txt",
+            "Textdatei (*.txt);;PDF-Datei (*.pdf)",
+        )
+        if not path:
+            return
+        try:
+            text = ydb.export_deck_combos_text(self.repo.db_path, self.deck_id)
+            # Format folgt der Endung; ohne Endung entscheidet der Filter.
+            as_pdf = path.lower().endswith(".pdf") or (
+                "PDF" in selected and "." not in os.path.basename(path)
+            )
+            if as_pdf:
+                if not path.lower().endswith(".pdf"):
+                    path += ".pdf"
+                self._write_pdf(path, text)
+            else:
+                if "." not in os.path.basename(path):
+                    path += ".txt"
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
+            return
+        self.status.setText(f"Kombo-Linien exportiert nach {path}")
+
+    @staticmethod
+    def _write_pdf(path: str, text: str) -> None:
+        """Text unveraendert als PDF setzen (Monospace, A4). QPdfWriter
+        gehoert zu PySide6 -- keine zusaetzliche Abhaengigkeit."""
+        writer = QPdfWriter(path)
+        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        writer.setPageMargins(
+            QMarginsF(15, 12, 15, 12), QPageLayout.Unit.Millimeter
+        )
+        doc = QTextDocument()
+        font = QFont("Consolas")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(9)
+        doc.setDefaultFont(font)
+        doc.setPlainText(text)
+        doc.print_(writer)
 
     # -- Kombo-Hilfe --------------------------------------------------------
 
@@ -1429,6 +1487,54 @@ class DeckView(QWidget):
 # Kombo-Bibliothek (eigener Tab zum Anlegen/Bearbeiten)
 # ---------------------------------------------------------------------------
 
+# In-App-Kurzreferenz der Kombo-Notation (Langform: KOMBO-NOTATION.md).
+# Eingebettet statt aus der Datei gelesen, damit sie auch im gepackten
+# Build ohne Repo-Dateien verfuegbar ist.
+_NOTATION_MD = """\
+### Schritt-Syntax
+
+```
+<AKTION> <Karte> (<Quelle>) [Req: <Bedingung>] -> <Folge> -> <Folge> | Lock: <Einschränkung>
+```
+
+Nur `<AKTION> <Karte>` ist Pflicht. **Ein Schritt = eine Aktion** — eine
+Beschwörung *oder* eine Effekt-Aktivierung samt direkter Auflösung.
+Beschwörungsformeln bekommen immer eine eigene Zeile (Tuner zuerst):
+
+```
+Synchro: Soul (2) + Bone (4) -> Red Rising (6)
+```
+
+- `->` verkettet Kosten → Wirkung → Resultat
+- `| Lock: …` für dauerhafte Einschränkungen, die der Schritt auslöst
+- `[Req: …]` für Bedingungen, damit der Schritt legal ist
+- `(Ort)` = woher die Karte kommt, `(A -> B)` = Bewegung; offensichtliche
+  Ziele entfallen (SS → Feld, Add → Hand)
+- Doppelpunkt für die konkrete Wahl: `Add 1 Resonator (Deck): Darkness Resonator`
+- Kurznamen sind okay, sobald eindeutig — die Bausteinliste ist die Legende
+
+### Keywords
+
+| Kürzel | Bedeutung |
+|---|---|
+| NS / SS | Normal / Special Summon |
+| Act | Zauber/Falle aktivieren |
+| Eff, Eff1, Eff2 | (ersten/zweiten) Effekt aktivieren |
+| Add | auf die Hand nehmen (Suche) |
+| Send / Banish / Mill | verschieben / verbannen / Deck → GY |
+| Draw / Discard / Set | ziehen / abwerfen / setzen |
+| GY / ED | Graveyard / Extra Deck |
+| Lvl | Level, z. B. `Lvl ≤4` |
+
+### Notizen der Kombo
+
+```
+Start: benötigte Hand-/Feldkarten
+End: Endboard / was die Kombo erreicht
+```
+"""
+
+
 class ComboView(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -1473,10 +1579,19 @@ class ComboView(QWidget):
         # Speichert sofort, wie Rollen und Boss.
         self.home_cb = QComboBox()
         self.home_cb.currentIndexChanged.connect(self._on_home_changed)
+        # Notizen tragen die Rahmendaten der Notation (Start/End), die nicht
+        # in die Schritte gehoeren.
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setAcceptRichText(False)
+        self.notes_edit.setFixedHeight(56)
+        self.notes_edit.setPlaceholderText(
+            "Start: benötigte Hand-/Feldkarten\nEnd: Endboard / Ziel"
+        )
         form.addRow("Name", self.name_edit)
         form.addRow("Archetyp", self.arch_edit)
         form.addRow("Heimat-Deck", self.home_cb)
         form.addRow("Boss", self.boss_cb)
+        form.addRow("Notizen", self.notes_edit)
         rv.addLayout(form)
 
         rv.addWidget(QLabel("Bausteine:"))
@@ -1516,11 +1631,28 @@ class ComboView(QWidget):
         cb_l.addWidget(self.coll_missing)
         rv.addWidget(coll_box, stretch=1)
 
-        rv.addWidget(QLabel(
+        steps_head = QHBoxLayout()
+        steps_head.addWidget(QLabel(
             "Schritte (eine Zeile pro Schritt — speichert automatisch):"
         ))
+        steps_head.addStretch()
+        notation_btn = QPushButton("Notation…")
+        notation_btn.clicked.connect(self._show_notation_help)
+        steps_head.addWidget(notation_btn)
+        rv.addLayout(steps_head)
         self.steps_edit = QTextEdit()
+        self.steps_edit.setAcceptRichText(False)
+        self.steps_edit.setPlaceholderText(
+            "<AKTION> <Karte> (<Quelle>) [Req: …] -> <Folge> | Lock: …\n"
+            "z. B.  NS Soul -> Eff1: Add 1 Archfiend Lvl ≤4 (Deck): Bone"
+        )
         rv.addWidget(self.steps_edit, stretch=1)
+        # Notation-Pruefung: nur Hinweis, nie blockierend.
+        self.lint_label = QLabel("")
+        self.lint_label.setWordWrap(True)
+        self.lint_label.setStyleSheet("color: #b36b00;")
+        self.lint_label.setVisible(False)
+        rv.addWidget(self.lint_label)
 
         splitter.addWidget(left)
         splitter.addWidget(self.editor)
@@ -1539,7 +1671,9 @@ class ComboView(QWidget):
         self._save_timer.timeout.connect(self.flush_pending)
         self.name_edit.textChanged.connect(self._on_editor_changed)
         self.arch_edit.textChanged.connect(self._on_editor_changed)
+        self.notes_edit.textChanged.connect(self._on_editor_changed)
         self.steps_edit.textChanged.connect(self._on_editor_changed)
+        self.steps_edit.textChanged.connect(self._update_lint)
 
         self.editor.setEnabled(False)
         self.refresh()
@@ -1667,9 +1801,11 @@ class ComboView(QWidget):
         self._loading = True
         self.name_edit.setText(combo["name"] or "")
         self.arch_edit.setText(combo["archetype"] or "")
+        self.notes_edit.setPlainText(combo["notes"] or "")
         steps = ydb.combo_steps(self.repo.db_path, self.combo_id)
         self.steps_edit.setPlainText("\n".join(s["text"] for s in steps))
         self._loading = False
+        self._update_lint()
         self._populate_home_deck(combo)
         self._load_pieces()
         self._refresh_collection_coverage()
@@ -1686,7 +1822,10 @@ class ComboView(QWidget):
         self.home_cb.clear()
         self.home_cb.blockSignals(False)
         self.pieces.clear()
+        self.notes_edit.clear()
         self.steps_edit.clear()
+        self.lint_label.clear()
+        self.lint_label.setVisible(False)
         self.coll_status.clear()
         self.coll_missing.clear()
         self._loading = False
@@ -1841,6 +1980,7 @@ class ComboView(QWidget):
             self.repo.db_path, combo_id,
             name=self.name_edit.text().strip() or "Unbenannt",
             archetype=self.arch_edit.text().strip() or None,
+            notes=self.notes_edit.toPlainText().strip() or None,
         )
         lines = [
             ln.strip() for ln in self.steps_edit.toPlainText().splitlines()
@@ -1856,6 +1996,37 @@ class ComboView(QWidget):
                 if combo is not None:
                     item.setText(self._combo_label(combo))
                 break
+
+    # -- Notation (Hilfe + beratende Pruefung) --------------------------------
+
+    def _update_lint(self) -> None:
+        """Prueft die Schritte gegen die Kombo-Notation. Nur ein Hinweis
+        unter dem Editor -- gespeichert wird immer."""
+        lines = [
+            ln.strip() for ln in self.steps_edit.toPlainText().splitlines()
+            if ln.strip()
+        ]
+        warnings = ydb.lint_combo_steps(lines)
+        if warnings:
+            shown = warnings[:4]
+            if len(warnings) > len(shown):
+                shown.append(f"… und {len(warnings) - len(shown)} weitere")
+            self.lint_label.setText("⚠ " + "\n⚠ ".join(shown))
+        self.lint_label.setVisible(bool(warnings))
+
+    def _show_notation_help(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Kombo-Notation")
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setMarkdown(_NOTATION_MD)
+        layout.addWidget(text)
+        close_btn = QPushButton("Schließen")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        dlg.resize(560, 520)
+        dlg.exec()
 
     def _adjust_piece(self, delta: int) -> None:
         item = self.pieces.currentItem()
