@@ -30,7 +30,8 @@ from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
     QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
     QTabWidget, QTextEdit, QVBoxLayout, QWidget,
@@ -724,10 +725,16 @@ class DeckView(QWidget):
         new_btn.clicked.connect(self._new_deck)
         del_btn = QPushButton("Deck löschen")
         del_btn.clicked.connect(self._delete_deck)
+        import_btn = QPushButton("Importieren…")
+        import_btn.clicked.connect(self._import_deck)
+        export_btn = QPushButton("Exportieren…")
+        export_btn.clicked.connect(self._export_deck)
         top.addWidget(QLabel("Deck:"))
         top.addWidget(self.deck_cb, stretch=1)
         top.addWidget(new_btn)
         top.addWidget(del_btn)
+        top.addWidget(import_btn)
+        top.addWidget(export_btn)
         layout.addLayout(top)
 
         zones_widget = QWidget()
@@ -830,6 +837,79 @@ class DeckView(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             ydb.delete_deck(self.repo.db_path, self.deck_id)
             self._reload_decks()
+
+    # -- Import / Export (.ydk) ----------------------------------------------
+
+    def _import_deck(self) -> None:
+        if not self.repo.exists():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Deck importieren", "", "YGOPro-Deck (*.ydk);;Alle Dateien (*)"
+        )
+        if not path:
+            return
+        try:
+            text = open(path, "r", encoding="utf-8", errors="replace").read()
+        except OSError as exc:
+            QMessageBox.warning(self, "Import fehlgeschlagen", str(exc))
+            return
+        default = os.path.splitext(os.path.basename(path))[0]
+        name, ok = QInputDialog.getText(
+            self, "Deck importieren", "Name des Decks:", text=default
+        )
+        if not ok or not name.strip():
+            return
+        deck_id, report = ydb.import_deck_ydk(self.repo.db_path, name.strip(), text)
+        if deck_id is None:
+            QMessageBox.warning(
+                self, "Import fehlgeschlagen",
+                "Keine der Karten wurde in der Datenbank gefunden. "
+                "Eventuell hilft ein Daten-Update (yugioh_db.py build).",
+            )
+            return
+        imp = report["imported"]
+        lines = [
+            f"Importiert: Main {imp['main']}, Extra {imp['extra']}, "
+            f"Side {imp['side']}."
+        ]
+        if report["unknown"]:
+            ids = ", ".join(str(i) for i in report["unknown"])
+            lines.append(f"Nicht in der Datenbank (übersprungen): {ids}")
+        if report["capped"]:
+            lines.append(
+                "Über der 3-Kopien-Grenze gekürzt: " + ", ".join(report["capped"])
+            )
+        if report["moved"]:
+            lines.append(
+                "In die passende Zone verschoben: " + ", ".join(report["moved"])
+            )
+        self._reload_decks()
+        idx = self.deck_cb.findData(deck_id)
+        if idx >= 0:
+            self.deck_cb.setCurrentIndex(idx)
+        if len(lines) > 1:
+            QMessageBox.information(self, "Deck importiert", "\n\n".join(lines))
+        else:
+            self.status.setText(lines[0] + "  " + self.status.text())
+
+    def _export_deck(self) -> None:
+        if self.deck_id is None:
+            return
+        suggested = self.deck_cb.currentText().strip() or "deck"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Deck exportieren", suggested + ".ydk",
+            "YGOPro-Deck (*.ydk);;Alle Dateien (*)",
+        )
+        if not path:
+            return
+        try:
+            text = ydb.export_deck_ydk(self.repo.db_path, self.deck_id)
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
+            return
+        self.status.setText(f"Deck exportiert nach {path}")
 
     # -- Anzeige ------------------------------------------------------------
 

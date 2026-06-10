@@ -867,6 +867,133 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Deck-Import/-Export (.ydk)
+# ---------------------------------------------------------------------------
+# .ydk ist das YGOPro-Format: je Zeile ein Passcode, Abschnitte "#main",
+# "#extra" und "!side"; weitere "#..."-Zeilen sind Kommentare. Die Passcodes
+# sind identisch mit unseren Karten-IDs, daher braucht es kein Mapping.
+
+def export_deck_ydk(db_path: str, deck_id: int) -> str:
+    """Serialisiert ein Deck als .ydk-Text (je Kopie eine Zeile)."""
+    conn = _connect(db_path)
+    try:
+        deck = conn.execute(
+            "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
+        ).fetchone()
+        if deck is None:
+            raise ValueError(f"Deck {deck_id} nicht gefunden.")
+        lines = [f"#created by YugiohSammlung - {deck['name']}"]
+        for zone, header in (("main", "#main"), ("extra", "#extra"), ("side", "!side")):
+            lines.append(header)
+            rows = conn.execute(
+                """SELECT dc.card_id, dc.quantity
+                   FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+                   WHERE dc.deck_id = ? AND dc.zone = ?
+                   ORDER BY c.name""",
+                (deck_id, zone),
+            ).fetchall()
+            for r in rows:
+                lines.extend([str(r["card_id"])] * r["quantity"])
+        return "\n".join(lines) + "\n"
+    finally:
+        conn.close()
+
+
+def parse_ydk(text: str) -> dict[str, list[int]]:
+    """Zerlegt .ydk-Text in {'main': [ids...], 'extra': [...], 'side': [...]}.
+    Jede Kopie steht einzeln in der Liste. Unbekannte Zeilen werden ignoriert."""
+    zones: dict[str, list[int]] = {"main": [], "extra": [], "side": []}
+    current = "main"
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if lower in ("#main", "#extra"):
+            current = lower[1:]
+        elif lower == "!side":
+            current = "side"
+        elif line.startswith(("#", "!")):
+            continue  # Kommentar (z.B. "#created by ...")
+        elif line.isdigit():
+            zones[current].append(int(line))
+    return zones
+
+
+def import_deck_ydk(db_path: str, name: str, text: str) -> tuple[Optional[int], dict]:
+    """Legt aus .ydk-Text ein neues Deck an. Erzwingt die 3-Kopien-Regel und
+    korrigiert Main/Extra anhand des Kartentyps (Side bleibt Side).
+
+    Rueckgabe: (deck_id, report). deck_id ist None, wenn keine einzige Karte
+    importiert werden konnte (dann wird auch kein Deck angelegt). report:
+      imported  -- importierte Kopien je Zone {'main': n, ...}
+      unknown   -- Passcodes ohne Karte in der DB (DB veraltet/fremde Karte)
+      capped    -- Kartennamen, bei denen Kopien ueber der 3er-Grenze wegfielen
+      moved     -- Kartennamen, die in die zum Typ passende Zone wandern mussten
+    """
+    zones = parse_ydk(text)
+    report: dict = {
+        "imported": {"main": 0, "extra": 0, "side": 0},
+        "unknown": [], "capped": [], "moved": [],
+    }
+    conn = _connect(db_path)
+    try:
+        # Kopien je (zone, card_id) zaehlen; Zone ggf. korrigieren.
+        counts: dict[tuple[str, int], int] = {}
+        cards: dict[int, sqlite3.Row] = {}
+        for zone, ids in zones.items():
+            for cid in ids:
+                if cid not in cards:
+                    row = conn.execute(
+                        "SELECT name, type, frame_type FROM cards WHERE id = ?",
+                        (cid,),
+                    ).fetchone()
+                    cards[cid] = row
+                card = cards[cid]
+                if card is None:
+                    if cid not in report["unknown"]:
+                        report["unknown"].append(cid)
+                    continue
+                target = zone
+                if zone != "side":
+                    natural = deck_zone_for(card["frame_type"], card["type"])
+                    if natural != zone:
+                        target = natural
+                        if card["name"] not in report["moved"]:
+                            report["moved"].append(card["name"])
+                counts[(target, cid)] = counts.get((target, cid), 0) + 1
+
+        # 3-Kopien-Grenze ueber alle Zonen zusammen durchsetzen.
+        totals: dict[int, int] = {}
+        for (zone, cid), n in sorted(counts.items()):
+            have = totals.get(cid, 0)
+            keep = min(n, max(0, MAX_COPIES - have))
+            totals[cid] = have + keep
+            if keep < n and cards[cid]["name"] not in report["capped"]:
+                report["capped"].append(cards[cid]["name"])
+            counts[(zone, cid)] = keep
+
+        if not any(n > 0 for n in counts.values()):
+            return (None, report)
+
+        cur = conn.execute("INSERT INTO decks (name) VALUES (?)", (name,))
+        deck_id = cur.lastrowid
+        for (zone, cid), n in counts.items():
+            if n <= 0:
+                continue
+            conn.execute(
+                "INSERT INTO deck_cards (deck_id, card_id, zone, quantity) "
+                "VALUES (?,?,?,?)",
+                (deck_id, cid, zone, n),
+            )
+            report["imported"][zone] += n
+        conn.commit()
+        return (deck_id, report)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Kombo-Bibliothek + Deckbuilding-Hilfe
 # ---------------------------------------------------------------------------
 
