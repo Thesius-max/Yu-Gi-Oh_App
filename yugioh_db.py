@@ -43,7 +43,7 @@ APP_DIR_NAME = "YugiohSammlung"
 # App-Version: eine Nummer fuer alle Plattform-Builds (Windows + macOS).
 # Release-Ritual: hochzaehlen -> committen -> Tag "v<version>" pushen; die CI
 # baut dann alle drei ZIPs und haengt sie an EIN gemeinsames GitHub-Release.
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 RELEASES_API_URL = (
     "https://api.github.com/repos/Thesius-max/Yu-Gi-Oh_App/releases/latest"
 )
@@ -285,9 +285,17 @@ CREATE TABLE IF NOT EXISTS card_translations (
 );
 
 -- Decks und ihre Karten (Main/Extra/Side).
+-- kind='reference' markiert importierte Meta-Listen (Korpus fuer den
+-- Synergie-Graphen); NULL = eigenes Deck. source = Herkunft (Turnier/URL/
+-- Spieler), format_date = Stand der Liste (ISO yyyy-mm-dd, fuer die
+-- Alterung der Co-Occurrence-Gewichte). Referenz-Decks binden keinen
+-- Bestand und erscheinen nicht in der normalen Deck-Auswahl.
 CREATE TABLE IF NOT EXISTS decks (
-    deck_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name     TEXT NOT NULL
+    deck_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT,
+    source      TEXT,
+    format_date TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deck_cards (
@@ -344,6 +352,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
         ("combos", "deck_id", "INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL"),
         ("combo_cards", "role", "TEXT"),
+        ("decks", "kind", "TEXT"),
+        ("decks", "source", "TEXT"),
+        ("decks", "format_date", "TEXT"),
     ):
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
@@ -830,10 +841,19 @@ def card_category(card_type: Optional[str]) -> str:
     return "other"
 
 
-def create_deck(db_path: str, name: str) -> int:
+def create_deck(
+    db_path: str, name: str, kind: Optional[str] = None,
+    source: Optional[str] = None, format_date: Optional[str] = None,
+) -> int:
+    """kind='reference' legt ein Referenz-Deck (Korpus) an; Standard ist
+    ein eigenes Deck (kind NULL)."""
     conn = _connect(db_path)
     try:
-        cur = conn.execute("INSERT INTO decks (name) VALUES (?)", (name,))
+        cur = conn.execute(
+            "INSERT INTO decks (name, kind, source, format_date) "
+            "VALUES (?,?,?,?)",
+            (name, kind, source, format_date),
+        )
         conn.commit()
         return cur.lastrowid
     finally:
@@ -841,10 +861,28 @@ def create_deck(db_path: str, name: str) -> int:
 
 
 def list_decks(db_path: str) -> list[sqlite3.Row]:
+    """Nur eigene Decks -- Referenz-Decks (Korpus) bleiben bewusst draussen,
+    damit Deck-Auswahl, Heimat-Deck und Filter sie nie anbieten."""
     conn = _connect(db_path)
     try:
         return conn.execute(
-            "SELECT deck_id, name FROM decks ORDER BY name"
+            "SELECT deck_id, name FROM decks WHERE kind IS NULL ORDER BY name"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def list_reference_decks(db_path: str) -> list[sqlite3.Row]:
+    """Der Korpus: importierte Meta-Listen mit Quelle, Stand und Kartenzahl,
+    neueste zuerst (Listen ohne Datum zuletzt)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            """SELECT d.deck_id, d.name, d.source, d.format_date,
+                      COALESCE((SELECT SUM(dc.quantity) FROM deck_cards dc
+                                WHERE dc.deck_id = d.deck_id), 0) AS cards
+               FROM decks d WHERE d.kind = 'reference'
+               ORDER BY d.format_date IS NULL, d.format_date DESC, d.name"""
         ).fetchall()
     finally:
         conn.close()
@@ -1062,8 +1100,10 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
                       COALESCE((SELECT SUM(col.quantity) FROM collection col
                                 WHERE col.card_id = dc.card_id), 0) AS owned,
                       COALESCE((SELECT SUM(o.quantity) FROM deck_cards o
+                                JOIN decks od ON od.deck_id = o.deck_id
                                 WHERE o.card_id = dc.card_id
-                                  AND o.deck_id != dc.deck_id), 0) AS elsewhere
+                                  AND o.deck_id != dc.deck_id
+                                  AND od.kind IS NULL), 0) AS elsewhere
                FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
                WHERE dc.deck_id = ?
                GROUP BY dc.card_id
@@ -1087,12 +1127,14 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
 
 
 def card_bound_in_decks(db_path: str, card_id: int) -> int:
-    """Wie viele Kopien einer Karte ueber alle Decks zusammen verplant sind."""
+    """Wie viele Kopien einer Karte ueber alle EIGENEN Decks zusammen
+    verplant sind (Referenz-Decks binden keinen physischen Bestand)."""
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            "SELECT COALESCE(SUM(quantity), 0) AS n FROM deck_cards "
-            "WHERE card_id = ?",
+            "SELECT COALESCE(SUM(dc.quantity), 0) AS n FROM deck_cards dc "
+            "JOIN decks d ON d.deck_id = dc.deck_id "
+            "WHERE dc.card_id = ? AND d.kind IS NULL",
             (card_id,),
         ).fetchone()
         return int(row["n"])
@@ -1196,9 +1238,14 @@ def parse_ydk(text: str) -> dict[str, list[int]]:
     return zones
 
 
-def import_deck_ydk(db_path: str, name: str, text: str) -> tuple[Optional[int], dict]:
+def import_deck_ydk(
+    db_path: str, name: str, text: str, kind: Optional[str] = None,
+    source: Optional[str] = None, format_date: Optional[str] = None,
+) -> tuple[Optional[int], dict]:
     """Legt aus .ydk-Text ein neues Deck an. Erzwingt die 3-Kopien-Regel und
     korrigiert Main/Extra anhand des Kartentyps (Side bleibt Side).
+    kind='reference' (plus source/format_date) importiert in den Korpus
+    statt in die eigenen Decks.
 
     Rueckgabe: (deck_id, report). deck_id ist None, wenn keine einzige Karte
     importiert werden konnte (dann wird auch kein Deck angelegt). report:
@@ -1252,7 +1299,11 @@ def import_deck_ydk(db_path: str, name: str, text: str) -> tuple[Optional[int], 
         if not any(n > 0 for n in counts.values()):
             return (None, report)
 
-        cur = conn.execute("INSERT INTO decks (name) VALUES (?)", (name,))
+        cur = conn.execute(
+            "INSERT INTO decks (name, kind, source, format_date) "
+            "VALUES (?,?,?,?)",
+            (name, kind, source, format_date),
+        )
         deck_id = cur.lastrowid
         for (zone, cid), n in counts.items():
             if n <= 0:

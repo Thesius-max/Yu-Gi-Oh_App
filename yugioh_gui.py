@@ -23,6 +23,7 @@ Aufbau (drei Spalten, frei skalierbar via Splitter):
 
 from __future__ import annotations
 
+import datetime
 import os
 import shutil
 import sys
@@ -184,6 +185,28 @@ _PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
 def _pct(p: float) -> str:
     """Wahrscheinlichkeit als deutschen Prozentwert formatieren (84,2 %)."""
     return f"{100 * p:.1f}".replace(".", ",") + " %"
+
+
+def _import_report_lines(report: dict) -> list[str]:
+    """Meldungszeilen aus einem import_deck_ydk-Report (Deck- und
+    Korpus-Import zeigen denselben Bericht)."""
+    imp = report["imported"]
+    lines = [
+        f"Importiert: Main {imp['main']}, Extra {imp['extra']}, "
+        f"Side {imp['side']}."
+    ]
+    if report["unknown"]:
+        ids = ", ".join(str(i) for i in report["unknown"])
+        lines.append(f"Nicht in der Datenbank (übersprungen): {ids}")
+    if report["capped"]:
+        lines.append(
+            "Über der 3-Kopien-Grenze gekürzt: " + ", ".join(report["capped"])
+        )
+    if report["moved"]:
+        lines.append(
+            "In die passende Zone verschoben: " + ", ".join(report["moved"])
+        )
+    return lines
 
 
 _RACE_DE: dict[str, str] = {
@@ -955,6 +978,161 @@ class ComboFromDeckDialog(QDialog):
         ]
 
 
+class _ReferenceMetaDialog(QDialog):
+    """Kleines Formular fuer die Korpus-Tags eines Referenz-Decks:
+    Name, Quelle (Turnier/URL/Spieler) und Stand der Liste."""
+
+    def __init__(self, default_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Referenz-Deck importieren")
+        form = QFormLayout(self)
+        self.name_edit = QLineEdit(default_name)
+        self.source_edit = QLineEdit()
+        self.source_edit.setPlaceholderText("Turnier, URL oder Spieler")
+        self.date_edit = QLineEdit(datetime.date.today().isoformat())
+        self.date_edit.setPlaceholderText("JJJJ-MM-TT (leer = unbekannt)")
+        form.addRow("Name:", self.name_edit)
+        form.addRow("Quelle:", self.source_edit)
+        form.addRow("Stand:", self.date_edit)
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("Importieren")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept_checked)
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addStretch(1)
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        form.addRow(btns)
+
+    def _accept_checked(self) -> None:
+        if not self.name_edit.text().strip():
+            QMessageBox.warning(self, "Eingabe fehlt", "Name darf nicht leer sein.")
+            return
+        date = self.date_edit.text().strip()
+        if date:
+            try:
+                datetime.date.fromisoformat(date)
+            except ValueError:
+                QMessageBox.warning(
+                    self, "Ungültiges Datum",
+                    "Stand bitte als JJJJ-MM-TT angeben (oder leer lassen).",
+                )
+                return
+        self.accept()
+
+    def values(self) -> tuple[str, str | None, str | None]:
+        return (
+            self.name_edit.text().strip(),
+            self.source_edit.text().strip() or None,
+            self.date_edit.text().strip() or None,
+        )
+
+
+class ReferenceDeckDialog(QDialog):
+    """Korpus-Verwaltung: importierte Meta-Decklisten (Referenz-Decks).
+    Sie liefern Co-Occurrence-Daten fuer die Kartenvorschlaege, binden
+    keinen Bestand und tauchen in keiner Deck-Auswahl auf."""
+
+    def __init__(self, repo: CardRepository, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Referenz-Decks (Korpus)")
+        self.resize(560, 420)
+        self.repo = repo
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Meta-Decklisten als .ydk importieren (z.B. Turnier-Listen). "
+            "Sie dienen nur als Datenbasis für Kartenvorschläge — neuere "
+            "Listen zählen später mehr."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.listing = QListWidget()
+        layout.addWidget(self.listing, stretch=1)
+
+        btns = QHBoxLayout()
+        import_btn = QPushButton("Importieren… (.ydk)")
+        import_btn.clicked.connect(self._import)
+        del_btn = QPushButton("Löschen")
+        del_btn.clicked.connect(self._delete)
+        close_btn = QPushButton("Schließen")
+        close_btn.clicked.connect(self.accept)
+        btns.addWidget(import_btn)
+        btns.addWidget(del_btn)
+        btns.addStretch(1)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+        self._reload()
+
+    def _reload(self) -> None:
+        self.listing.clear()
+        for d in ydb.list_reference_decks(self.repo.db_path):
+            parts = [d["name"]]
+            if d["format_date"]:
+                parts.append(d["format_date"])
+            if d["source"]:
+                parts.append(d["source"])
+            item = QListWidgetItem(" — ".join(parts) + f"  ({d['cards']} Karten)")
+            item.setData(Qt.ItemDataRole.UserRole, d["deck_id"])
+            self.listing.addItem(item)
+        if self.listing.count() == 0:
+            item = QListWidgetItem(
+                "Noch keine Referenz-Decks — .ydk-Listen von Turnier-Seiten "
+                "importieren."
+            )
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.listing.addItem(item)
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Referenz-Deck importieren", "",
+            "YGOPro-Deck (*.ydk);;Alle Dateien (*)",
+        )
+        if not path:
+            return
+        try:
+            text = open(path, "r", encoding="utf-8", errors="replace").read()
+        except OSError as exc:
+            QMessageBox.warning(self, "Import fehlgeschlagen", str(exc))
+            return
+        meta = _ReferenceMetaDialog(
+            os.path.splitext(os.path.basename(path))[0], self
+        )
+        if meta.exec() != QDialog.DialogCode.Accepted:
+            return
+        name, source, format_date = meta.values()
+        deck_id, report = ydb.import_deck_ydk(
+            self.repo.db_path, name, text,
+            kind="reference", source=source, format_date=format_date,
+        )
+        if deck_id is None:
+            QMessageBox.warning(
+                self, "Import fehlgeschlagen",
+                "Keine der Karten wurde in der Datenbank gefunden. "
+                "Eventuell hilft ein Daten-Update (Menü 'Daten').",
+            )
+            return
+        lines = _import_report_lines(report)
+        if len(lines) > 1:
+            QMessageBox.information(
+                self, "Referenz-Deck importiert", "\n\n".join(lines)
+            )
+        self._reload()
+
+    def _delete(self) -> None:
+        item = self.listing.currentItem()
+        if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
+            return
+        reply = QMessageBox.question(
+            self, "Referenz-Deck löschen",
+            f"'{item.text()}' aus dem Korpus löschen?",
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            ydb.delete_deck(self.repo.db_path, item.data(Qt.ItemDataRole.UserRole))
+            self._reload()
+
+
 class DeckView(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -979,12 +1157,19 @@ class DeckView(QWidget):
         import_btn.clicked.connect(self._import_deck)
         export_btn = QPushButton("Exportieren…")
         export_btn.clicked.connect(self._export_deck)
+        corpus_btn = QPushButton("Korpus…")
+        corpus_btn.setToolTip(
+            "Referenz-Decks (Meta-Listen) als Datenbasis für "
+            "Kartenvorschläge verwalten"
+        )
+        corpus_btn.clicked.connect(self._open_corpus)
         top.addWidget(QLabel("Deck:"))
         top.addWidget(self.deck_cb, stretch=1)
         top.addWidget(new_btn)
         top.addWidget(del_btn)
         top.addWidget(import_btn)
         top.addWidget(export_btn)
+        top.addWidget(corpus_btn)
         layout.addLayout(top)
 
         zones_widget = QWidget()
@@ -1099,6 +1284,13 @@ class DeckView(QWidget):
             if idx >= 0:
                 self.deck_cb.setCurrentIndex(idx)
 
+    def _open_corpus(self) -> None:
+        """Referenz-Decks (Korpus) verwalten -- eigener Dialog, damit sie
+        die normale Deck-Auswahl nie verstopfen."""
+        if not self.repo.exists():
+            return
+        ReferenceDeckDialog(self.repo, self).exec()
+
     def _delete_deck(self) -> None:
         if self.deck_id is None:
             return
@@ -1139,22 +1331,7 @@ class DeckView(QWidget):
                 "Eventuell hilft ein Daten-Update (yugioh_db.py build).",
             )
             return
-        imp = report["imported"]
-        lines = [
-            f"Importiert: Main {imp['main']}, Extra {imp['extra']}, "
-            f"Side {imp['side']}."
-        ]
-        if report["unknown"]:
-            ids = ", ".join(str(i) for i in report["unknown"])
-            lines.append(f"Nicht in der Datenbank (übersprungen): {ids}")
-        if report["capped"]:
-            lines.append(
-                "Über der 3-Kopien-Grenze gekürzt: " + ", ".join(report["capped"])
-            )
-        if report["moved"]:
-            lines.append(
-                "In die passende Zone verschoben: " + ", ".join(report["moved"])
-            )
+        lines = _import_report_lines(report)
         self._reload_decks()
         idx = self.deck_cb.findData(deck_id)
         if idx >= 0:
