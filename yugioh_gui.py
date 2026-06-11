@@ -1547,9 +1547,9 @@ class DeckView(QWidget):
         if not res["suggestions"]:
             self._add_plan_note(
                 self.suggestion_list,
-                "Keine Vorschläge — alle Bausteine der Kombos stecken schon "
-                "im Deck, oder es gibt noch keine Kombos mit mehreren "
-                "Bausteinen.",
+                "Keine Vorschläge — alle bekannten Karten stecken schon im "
+                "Deck, oder es fehlen Kombos mit mehreren Bausteinen bzw. "
+                "Referenz-Decks (Korpus…).",
             )
             return
         fills_gap = [s for s in res["suggestions"] if gap in s["roles"]]
@@ -1573,6 +1573,15 @@ class DeckView(QWidget):
                 ]
                 if s["bridges"]:
                     tip.append("indirekt über " + ", ".join(s["bridges"]))
+                if s["corpus"]:
+                    partners = ", ".join(
+                        f"{l['name']} ({l['decks']})" for l in s["corpus"]
+                    )
+                    tip.append(
+                        f"Korpus ({s['corpus_total']} Referenz-Listen): "
+                        f"stärkste Partner im Deck: {partners} "
+                        "— (n) = gemeinsame Listen"
+                    )
                 item.setToolTip("\n".join(tip))
                 item.setData(Qt.ItemDataRole.UserRole, s["card_id"])
                 self.suggestion_list.addItem(item)
