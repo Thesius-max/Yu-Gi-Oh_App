@@ -962,6 +962,9 @@ class DeckView(QWidget):
         self.deck_id: int | None = None
         # Wird von MainWindow gesetzt: oeffnet eine Kombo im Kombos-Tab.
         self.open_combo_callback = None
+        # Wird von MainWindow gesetzt: callback(card_id) -- Karte im
+        # DetailPanel des Suche-Tabs zeigen (fuer Vorschlaege).
+        self.open_card_callback = None
 
         layout = QVBoxLayout(self)
 
@@ -1035,6 +1038,20 @@ class DeckView(QWidget):
         self.boss_lines.itemDoubleClicked.connect(self._open_line)
         pv.addWidget(self.boss_lines, stretch=1)
         self.helper_tabs.addTab(plan_tab, "Fahrplan")
+
+        sug_tab = QWidget()
+        sv = QVBoxLayout(sug_tab)
+        self.gap_label = QLabel("")
+        self.gap_label.setWordWrap(True)
+        sv.addWidget(self.gap_label)
+        sv.addWidget(QLabel(
+            "Karten aus den Kombos, die im Deck fehlen "
+            "(Doppelklick zeigt die Karte):"
+        ))
+        self.suggestion_list = QListWidget()
+        self.suggestion_list.itemDoubleClicked.connect(self._open_suggestion)
+        sv.addWidget(self.suggestion_list, stretch=1)
+        self.helper_tabs.addTab(sug_tab, "Vorschläge")
 
         # Kombo-Linien als Datei weitergeben (z.B. an erfahrene Spieler).
         export_combos_btn = QPushButton("Kombo-Linien exportieren…")
@@ -1203,6 +1220,7 @@ class DeckView(QWidget):
         self._refresh_consistency()
         self._refresh_plan()
         self._refresh_combos()
+        self._refresh_suggestions()
 
     def _export_combos(self) -> None:
         """Kombo-Linien des Decks als .txt oder .pdf speichern."""
@@ -1335,6 +1353,59 @@ class DeckView(QWidget):
             return
         self.helper_tabs.setCurrentIndex(0)
         self._select_combo(combo_id)
+
+    def _refresh_suggestions(self) -> None:
+        """Vorschlaege aus dem Synergie-Graphen; die Luecken-Rolle (wenigste
+        Kopien im Main Deck) steuert nur die Gruppierung, nie den Score."""
+        self.gap_label.setText("")
+        self.suggestion_list.clear()
+        if self.deck_id is None or not self.repo.exists():
+            return
+        res = ydb.deck_suggestions(self.repo.db_path, self.deck_id)
+        gap = res["gap_role"]
+        copies = res["role_copies"].get(gap, 0)
+        self.gap_label.setText(
+            f"Engpass: {_ROLE_DE[gap]} ({copies} Kopien im Main Deck)"
+        )
+        if not res["suggestions"]:
+            self._add_plan_note(
+                self.suggestion_list,
+                "Keine Vorschläge — alle Bausteine der Kombos stecken schon "
+                "im Deck, oder es gibt noch keine Kombos mit mehreren "
+                "Bausteinen.",
+            )
+            return
+        fills_gap = [s for s in res["suggestions"] if gap in s["roles"]]
+        others = [s for s in res["suggestions"] if gap not in s["roles"]]
+        for header, group in (
+            (f"Füllt die Lücke: {_ROLE_DE[gap]}", fills_gap),
+            ("Weitere Vorschläge", others),
+        ):
+            if not group:
+                continue
+            self._add_plan_header(self.suggestion_list, header)
+            for s in group:
+                roles = ", ".join(_ROLE_DE[r] for r in s["roles"])
+                score = f"{s['score']:.1f}".replace(".", ",")
+                item = QListWidgetItem(
+                    f"{s['name']}  ({roles or 'uneingestuft'}) — Score {score}"
+                )
+                tip = [
+                    f"in '{r['combo_name']}' zusammen mit {', '.join(r['with'])}"
+                    for r in s["reasons"]
+                ]
+                if s["bridges"]:
+                    tip.append("indirekt über " + ", ".join(s["bridges"]))
+                item.setToolTip("\n".join(tip))
+                item.setData(Qt.ItemDataRole.UserRole, s["card_id"])
+                self.suggestion_list.addItem(item)
+
+    def _open_suggestion(self, item: QListWidgetItem) -> None:
+        """Doppelklick auf einen Vorschlag: Karte im DetailPanel zeigen."""
+        card_id = item.data(Qt.ItemDataRole.UserRole)
+        if card_id is None or self.open_card_callback is None:
+            return
+        self.open_card_callback(card_id)
 
     def _refresh_combos(self) -> None:
         self.combo_list.clear()
@@ -2129,6 +2200,8 @@ class MainWindow(QMainWindow):
         self.detail.add_to_combo_callback = self.combo_view.add_piece
         # Deck-Tab -> neue Kombo im Kombos-Tab oeffnen
         self.deck_view.open_combo_callback = self._open_combo
+        # Deck-Tab (Vorschlaege) -> Karte im DetailPanel des Suche-Tabs
+        self.deck_view.open_card_callback = self._show_card
 
         self.tabs = QTabWidget()
         self.tabs.addTab(splitter, "Suche")
@@ -2277,6 +2350,15 @@ class MainWindow(QMainWindow):
         """Aus dem Deck-Tab: in den Kombos-Tab wechseln und die Kombo zeigen."""
         self.tabs.setCurrentWidget(self.combo_view)
         self.combo_view.focus_combo(combo_id)
+
+    def _show_card(self, card_id: int) -> None:
+        """Aus dem Deck-Tab: Karte im DetailPanel zeigen (lebt im Suche-Tab);
+        von dort fuegt '+ Deck' sie direkt dem aktiven Deck hinzu."""
+        card = self.repo.get_card(card_id)
+        if card is None:
+            return
+        self.tabs.setCurrentIndex(0)  # Suche-Tab haelt das DetailPanel
+        self.detail.show_card(card)
 
     def closeEvent(self, event) -> None:
         # Noch nicht gespeicherte Kombo-Eingaben sichern (Auto-Save-Timer

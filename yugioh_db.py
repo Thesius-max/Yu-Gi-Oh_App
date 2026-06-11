@@ -22,6 +22,7 @@ anzeigen will, laedt sie einmal herunter und legt sie lokal ab
 from __future__ import annotations
 
 import datetime
+import itertools
 import json
 import math
 import os
@@ -1889,6 +1890,145 @@ def deck_consistency(
             "brick": 1.0 - p_starter,
         }
     return {"deck_size": size, "roles": roles, "hands": hands}
+
+
+# ---------------------------------------------------------------------------
+# Synergie-Graph & Vorschlaege (Roadmap-Schritt 4)
+# ---------------------------------------------------------------------------
+
+# Abschlag fuer Zwei-Hop-Verbindungen: eine Brueckenkarte (selbst nicht im
+# Deck) zaehlt deutlich weniger als eine direkte gemeinsame Kombo.
+_TRANSITIVE_DISCOUNT = 0.3
+
+
+def synergy_edges(db_path: str) -> dict[tuple[int, int], dict]:
+    """Kanten des Synergie-Graphen aus der Kombo-Bibliothek: zwei Karten sind
+    verbunden, wenn sie gemeinsam in einer Kombo stehen; Gewicht = Anzahl
+    gemeinsamer Kombos. Der Meta-Korpus (Roadmap-Schritt 5) speist spaeter
+    zusaetzliche Kanten in denselben Graphen ein.
+    Rueckgabe: {(a, b): {'weight': n, 'combos': [combo_id, ...]}} mit a < b."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute("SELECT combo_id, card_id FROM combo_cards").fetchall()
+    finally:
+        conn.close()
+    members: dict[int, set[int]] = {}
+    for r in rows:
+        members.setdefault(r["combo_id"], set()).add(r["card_id"])
+    edges: dict[tuple[int, int], dict] = {}
+    for combo_id in sorted(members):
+        for a, b in itertools.combinations(sorted(members[combo_id]), 2):
+            e = edges.setdefault((a, b), {"weight": 0, "combos": []})
+            e["weight"] += 1
+            e["combos"].append(combo_id)
+    return edges
+
+
+def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
+    """Kartenvorschlaege fuer ein Deck aus dem Synergie-Graphen.
+
+    Direkt: jede Kombo, die den Kandidaten enthaelt, traegt einen Punkt je
+    Baustein, der schon im Deck (Main+Extra, wie combo_coverage) liegt --
+    daraus entsteht zugleich die Begruendung ('zusammen mit X, Y in Kombo Z').
+    Transitiv: Brueckenkarten (weder im Deck noch der Kandidat), die sowohl
+    mit dem Kandidaten als auch mit >=1 Deck-Karte verbunden sind, gehen mit
+    _TRANSITIVE_DISCOUNT ein. Kandidaten sind nur Karten, die in KEINER Zone
+    des Decks liegen. Die Luecken-Rolle (gap_role = Rolle mit den wenigsten
+    Kopien im Main Deck) manipuliert keine Scores, sie steuert nur die
+    Gruppierung in der Anzeige.
+    Rueckgabe: {'gap_role', 'role_copies', 'suggestions': [{'card_id',
+    'name', 'score', 'direct', 'bridges', 'roles', 'reasons'}, ...]},
+    Score-sortiert, auf 'limit' gekappt."""
+    conn = _connect(db_path)
+    try:
+        deck_rows = conn.execute(
+            "SELECT card_id, zone FROM deck_cards WHERE deck_id = ?",
+            (deck_id,),
+        ).fetchall()
+        combo_rows = conn.execute(
+            """SELECT cc.combo_id, cb.name AS combo_name, cc.card_id, cc.role
+               FROM combo_cards cc JOIN combos cb ON cb.combo_id = cc.combo_id"""
+        ).fetchall()
+        card_ids = {r["card_id"] for r in combo_rows}
+        names: dict[int, str] = {}
+        if card_ids:
+            ph = ",".join("?" * len(card_ids))
+            names = {
+                r["id"]: r["name"]
+                for r in conn.execute(
+                    f"""SELECT id, COALESCE(name_de, name) AS name
+                        FROM cards WHERE id IN ({ph})""",
+                    tuple(card_ids),
+                )
+            }
+    finally:
+        conn.close()
+
+    in_deck_any = {r["card_id"] for r in deck_rows}
+    deck_set = {r["card_id"] for r in deck_rows if r["zone"] in ("main", "extra")}
+
+    # Kombo-Mitgliedschaften, Rollen und Direkt-Score samt Begruendung.
+    combo_members: dict[int, set[int]] = {}
+    combo_names: dict[int, str] = {}
+    roles: dict[int, set[str]] = {}
+    for r in combo_rows:
+        combo_members.setdefault(r["combo_id"], set()).add(r["card_id"])
+        combo_names[r["combo_id"]] = r["combo_name"]
+        if r["role"]:
+            roles.setdefault(r["card_id"], set()).add(r["role"])
+
+    direct: dict[int, int] = {}
+    reasons: dict[int, list[dict]] = {}
+    for combo_id in sorted(combo_members):
+        members = combo_members[combo_id]
+        overlap = members & deck_set
+        if not overlap:
+            continue
+        for c in members - in_deck_any:
+            direct[c] = direct.get(c, 0) + len(overlap)
+            reasons.setdefault(c, []).append({
+                "combo_id": combo_id,
+                "combo_name": combo_names[combo_id],
+                "with": sorted(names.get(d, str(d)) for d in overlap),
+            })
+
+    # Adjazenz fuer den Zwei-Hop-Anteil (Brueckenkarten).
+    adj: dict[int, set[int]] = {}
+    for (a, b), _e in synergy_edges(db_path).items():
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    candidates = set(adj) - in_deck_any
+    bridges: dict[int, list[int]] = {}
+    for c in candidates:
+        bridges[c] = sorted(
+            m for m in adj[c]
+            if m not in in_deck_any and adj.get(m, set()) & deck_set
+        )
+
+    suggestions = []
+    for c in candidates:
+        n_bridges = len(bridges.get(c, []))
+        score = direct.get(c, 0) + _TRANSITIVE_DISCOUNT * n_bridges
+        if score <= 0:
+            continue
+        suggestions.append({
+            "card_id": c,
+            "name": names.get(c, str(c)),
+            "score": score,
+            "direct": direct.get(c, 0),
+            "bridges": [names.get(m, str(m)) for m in bridges.get(c, [])],
+            "roles": sorted(roles.get(c, ())),
+            "reasons": reasons.get(c, []),
+        })
+    suggestions.sort(key=lambda s: (-s["score"], s["name"]))
+
+    role_copies = deck_role_copies(db_path, deck_id)
+    gap_role = min(COMBO_ROLES, key=lambda r: role_copies.get(r, 0))
+    return {
+        "gap_role": gap_role,
+        "role_copies": role_copies,
+        "suggestions": suggestions[:limit],
+    }
 
 
 # ---------------------------------------------------------------------------
