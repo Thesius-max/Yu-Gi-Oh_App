@@ -33,7 +33,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QImage, QPageLayout, QPageSize,
-    QPdfWriter, QPixmap, QPixmapCache, QTextDocument,
+    QPalette, QPdfWriter, QPixmap, QPixmapCache, QTextCursor, QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
@@ -41,7 +41,8 @@ from PySide6.QtWidgets import (
     QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
     QProgressDialog, QPushButton, QSpinBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout,
+    QWidget,
 )
 
 import yugioh_db as ydb
@@ -1791,6 +1792,24 @@ End: Endboard / was die Kombo erreicht
 ```
 """
 
+# Tokens fuer die dauerhafte Chip-Leiste ueber dem Schritte-Editor:
+# (Beschriftung, einzufuegender Text, Cursor-Schritte zurueck, Tooltip).
+# Klick fuegt das Token an der Cursor-Position ein; nur Kartennamen werden
+# noch von Hand getippt. Die Langform bleibt im "Notation..."-Dialog
+# (_NOTATION_MD) -- hier nur die haeufigsten Bausteine kompakt in einer Reihe.
+_STEP_TOKENS = [
+    ("NS", "NS ", 0, "Normal Summon"),
+    ("SS", "SS ", 0, "Special Summon"),
+    ("Act", "Act ", 0, "Zauber/Falle aktivieren"),
+    ("Eff1", "Eff1 ", 0, "Effekt aktivieren (Eff/Eff1/Eff2)"),
+    ("Add", "Add ", 0, "auf die Hand nehmen (Suche)"),
+    ("Send", "Send ", 0, "auf den Friedhof legen"),
+    ("Banish", "Banish ", 0, "verbannen"),
+    ("→", " -> ", 0, "Kette: Kosten → Wirkung → Resultat"),
+    ("[Req:]", "[Req: ]", 1, "Bedingung, damit der Schritt legal ist"),
+    ("| Lock:", " | Lock: ", 0, "dauerhafte Einschränkung, die der Schritt auslöst"),
+]
+
 
 class ComboView(QWidget):
     def __init__(self, repo: CardRepository):
@@ -1897,6 +1916,7 @@ class ComboView(QWidget):
         notation_btn.clicked.connect(self._show_notation_help)
         steps_head.addWidget(notation_btn)
         rv.addLayout(steps_head)
+        rv.addLayout(self._build_token_bar())
         self.steps_edit = QTextEdit()
         self.steps_edit.setAcceptRichText(False)
         self.steps_edit.setPlaceholderText(
@@ -1907,7 +1927,7 @@ class ComboView(QWidget):
         # Notation-Pruefung: nur Hinweis, nie blockierend.
         self.lint_label = QLabel("")
         self.lint_label.setWordWrap(True)
-        self.lint_label.setStyleSheet("color: #b36b00;")
+        self.lint_label.setStyleSheet("color: #e6a23c;")
         self.lint_label.setVisible(False)
         rv.addWidget(self.lint_label)
 
@@ -2271,6 +2291,41 @@ class ComboView(QWidget):
             self.lint_label.setText("⚠ " + "\n⚠ ".join(shown))
         self.lint_label.setVisible(bool(warnings))
 
+    def _build_token_bar(self) -> QHBoxLayout:
+        """Kompakte, dauerhaft sichtbare Leiste mit Notations-Tokens. Klick
+        fuegt das Token an der Cursor-Position im Schritte-Editor ein -- die
+        Leiste ist die Legende, der 'Notation...'-Dialog die Langform."""
+        bar = QHBoxLayout()
+        bar.setSpacing(4)
+        lbl = QLabel("Notation:")
+        lbl.setStyleSheet("color: #9b90b5;")
+        bar.addWidget(lbl)
+        for label, text, back, tip in _STEP_TOKENS:
+            chip = QPushButton(label)
+            chip.setToolTip(tip)
+            # Fokus nicht stehlen, damit der Cursor im Editor sichtbar bleibt.
+            chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            chip.setStyleSheet("padding: 1px 6px;")
+            chip.clicked.connect(
+                lambda _=False, t=text, b=back: self._insert_token(t, b)
+            )
+            bar.addWidget(chip)
+        bar.addStretch()
+        return bar
+
+    def _insert_token(self, text: str, back: int = 0) -> None:
+        """Token an der aktuellen Cursor-Position im Schritte-Editor einfuegen;
+        'back' setzt den Cursor n Zeichen nach links (z.B. in '[Req: ]')."""
+        cursor = self.steps_edit.textCursor()
+        cursor.insertText(text)
+        if back:
+            cursor.movePosition(
+                QTextCursor.MoveOperation.Left,
+                QTextCursor.MoveMode.MoveAnchor, back,
+            )
+            self.steps_edit.setTextCursor(cursor)
+        self.steps_edit.setFocus()
+
     def _show_notation_help(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Kombo-Notation")
@@ -2338,6 +2393,268 @@ class ComboView(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Benutzerhandbuch (eigener Tab)
+# ---------------------------------------------------------------------------
+
+# Das Handbuch ist eingebettet (nicht aus einer Datei gelesen), damit es auch
+# im gepackten Build ohne Repo-Dateien vollstaendig vorliegt -- gleiche
+# Begruendung wie bei _NOTATION_MD. Jeder Eintrag: (Titel, Markdown). Die
+# Reihenfolge ist die Lese-Reihenfolge; sie folgt den Tabs der App.
+_MANUAL_SECTIONS: list[tuple[str, str]] = [
+    ("Überblick & erste Schritte", """\
+# Überblick
+
+Diese App verwaltet deine **Yu-Gi-Oh!-Sammlung**, hilft beim **Deckbuilding**
+und pflegt eine eigene **Kombo-Bibliothek**. Sie läuft eigenständig auf deinem
+Rechner; die Kartendaten werden einmalig aus dem Internet geladen und danach
+lokal gehalten — **danach arbeitet die App offline**.
+
+## Die fünf Tabs
+
+| Tab | Wofür |
+|---|---|
+| **Suche** | Karten finden, Details ansehen, in Sammlung/Deck/Kombo übernehmen |
+| **Sammlung** | dein physischer Kartenbestand |
+| **Deck** | Decks bauen, prüfen, importieren/exportieren, Kombo-Hilfe |
+| **Kombos** | Kombo-Linien dokumentieren (Bausteine, Rollen, Schritte) |
+| **Handbuch** | diese Hilfe |
+
+## Beim allerersten Start
+
+Ist noch keine Kartendatenbank vorhanden, lädst du sie über das Menü
+**Daten → Kartendaten aktualisieren…** herunter (braucht einmalig Internet).
+Danach füllen sich Such-Filter und Listen automatisch.
+
+> **Deine Daten sind getrennt von den Kartendaten.** Sammlung, Decks,
+> Übersetzungen und Kombos bleiben bei jedem Karten- oder App-Update erhalten.
+"""),
+
+    ("Suche-Tab", """\
+# Suche
+
+Der Suche-Tab hat drei Spalten (frei per Trennbalken verschiebbar):
+**Filter** links, **Trefferliste** in der Mitte, **Detailansicht** rechts.
+
+## Suchen & filtern
+
+- **Textfeld oben:** durchsucht **Name und Kartentext** (Volltext).
+- **Filter:** Typ, Attribut, Archetyp, Level/Rank, ATK von–bis.
+  Jede Änderung löst sofort eine neue Suche aus.
+- **„Nur meine Sammlung":** beschränkt die Treffer auf Karten, die du besitzt.
+- Die Trefferzahl steht unten links.
+
+## Detailansicht (rechts)
+
+Zeigt Bild, Werte und Kartentext der gewählten Karte. Das Bild wird beim
+ersten Aufruf einmal lokal zwischengespeichert.
+
+- **✎ DE** — eigene **deutsche Übersetzung** für Name und/oder Kartentext
+  hinterlegen. Leere Felder lassen die Originaldaten unangetastet. Deine
+  Übersetzungen überleben Kartendaten-Updates.
+- **Sammlung → Hinzufügen** — legt die Karte in deinen Bestand (gleiche Drucke
+  werden zusammengeführt, nicht dupliziert).
+- **Deck → + Deck / + Side** — fügt die Karte dem **aktiven Deck** in die
+  passende Zone bzw. ins Side Deck hinzu.
+- **Kombo → + als Baustein zur aktiven Kombo** — übernimmt die Karte als
+  Baustein der gerade im Kombos-Tab geöffneten Kombo.
+"""),
+
+    ("Sammlung-Tab", """\
+# Sammlung
+
+Hier steht dein **physischer Kartenbestand** — was du tatsächlich besitzt.
+
+- **Filter:** nach Name, Attribut und Archetyp eingrenzen.
+- **Aktualisieren** — Liste neu laden.
+- **Ausgewählten Eintrag entfernen** — nimmt den markierten Bestand heraus.
+
+Identische Drucke einer Karte werden **zusammengeführt** statt mehrfach
+gelistet. Neue Karten kommen am einfachsten über den **Suche-Tab**
+(„Hinzufügen") in die Sammlung.
+
+> Die Sammlung ist die Grundlage für die Baubarkeits-Anzeigen in Deck- und
+> Kombo-Tab („besitzt du schon / müsstest du holen").
+"""),
+
+    ("Deck-Tab", """\
+# Deck
+
+Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
+**Main / Extra / Side** und der **Kombo-Hilfe**.
+
+## Decks verwalten
+
+- **Neues Deck / Deck löschen** — Decks anlegen und entfernen.
+- **Karten hinzufügen:** im Suche-Tab über **+ Deck / + Side**, oder per
+  **+ Karte hinzufügen** im Deck-Tab.
+- **−1 / +1 / Entfernen** — Kopienzahl der markierten Karte ändern.
+- **→ Deck / → Side** — Karte zwischen Main/Extra und Side verschieben.
+
+**Automatik & Regeln:**
+
+- Die **Zone** (Main oder Extra) wird automatisch aus dem Kartentyp bestimmt
+  (Fusion/Synchro/Xyz/Link → Extra Deck).
+- Die **3-Kopien-Regel** gilt über alle Zonen zusammen und wird erzwungen.
+- **⚠ fehlt n** markiert Karten, für die dein Sammlungsbestand nicht reicht
+  (Kopien in anderen Decks binden Bestand). Das ist nur ein **Hinweis** —
+  Deckbuilding über den Bestand hinaus bleibt für geplante Käufe erlaubt.
+
+## Import & Export (.ydk)
+
+- **Importieren… / Exportieren…** lesen und schreiben `.ydk`-Dateien
+  (das Standardformat; die Karten-ID ist der Passcode).
+- Der Import erzwingt die 3-Kopien-Regel, sortiert Main/Extra korrekt und
+  meldet unbekannte Passcodes im Bericht, statt abzubrechen.
+
+## Korpus… (Referenz-Decks)
+
+Über **Korpus…** importierst du fremde Meta-Decklisten als Referenz. Sie
+**binden keinen Bestand** und tauchen nicht in deiner Deck-Auswahl auf — sie
+speisen nur die Vorschläge (siehe Kombo-Hilfe → Vorschläge). Tagge sie mit
+**Quelle** und **Stand (Datum)**; neuere Listen werden höher gewichtet.
+
+## Kombo-Hilfe (rechte Box)
+
+Drei Reiter:
+
+- **Kombos** — Kombos nach Abdeckung im Deck, mit Bausteinen und Schritten.
+  **Fehlende Bausteine ins Deck** ergänzt fehlende Karten; **Neue Kombo aus
+  diesem Deck…** legt eine Kombo aus angekreuzten Deck-Karten an.
+- **Fahrplan** — Karten je **Rolle** und **Linien zum Boss**; Doppelklick auf
+  eine Linie öffnet die Kombo. Oben steht die **Konsistenz** (Wahrscheinlichkeit
+  für Starter/Handtrap in der Starthand, Brick-Quote).
+- **Vorschläge** — Kartenempfehlungen aus dem Synergie-Graphen samt
+  **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab.
+
+**Kombo-Linien exportieren…** schreibt die Linien des Decks als `.txt` oder
+`.pdf` — z. B. um sie einem erfahrenen Spieler zum Drüberschauen zu geben.
+"""),
+
+    ("Kombos-Tab", """\
+# Kombos
+
+Die **Kombo-Bibliothek** ist das Herz der App: Hier dokumentierst du Spiel-
+Linien. Sie liefern Guides, den Deck-Fahrplan **und** die Kartenvorschläge.
+
+Links die Kombo-Liste (mit **Deck-Filter**), rechts der Editor.
+
+## Kopfdaten
+
+- **Name / Archetyp** — frei.
+- **Heimat-Deck** — optionale Verknüpfung/Filter, **kein Besitz**: jede Kombo
+  bleibt gegen jedes Deck abgleichbar.
+- **Boss** — das Zielmonster der Linie, gewählt aus den Bausteinen.
+- **Notizen** — Rahmendaten der Linie: `Start:` (benötigte Hand-/Feldkarten)
+  und `End:` (Endboard). Diese gehören in die Notizen, **nicht** in die Schritte.
+
+## Bausteine
+
+Die Karten der Kombo. **+ Baustein…** sucht und fügt direkt hinzu (kein
+Tab-Wechsel); **−1 / +1 / Entfernen** ändern die Anzahl. Über **Rolle** stufst
+du den markierten Baustein ein: *Starter / Extender / Payoff / Handtrap*. Die
+Rolle gilt **je Kombo**, nicht global für die Karte.
+
+Die Box **„Mit deiner Sammlung"** zeigt, welche Bausteine du schon besitzt und
+welche fehlen.
+
+## Schritte & Notation
+
+Im Schritte-Editor steht **eine Zeile pro Schritt**. Darüber liegt die
+dauerhafte **Notations-Leiste**: ein Klick auf ein Token (`NS`, `SS`, `Act`,
+`Eff1`, `Add`, `Send`, `Banish`, `→`, `[Req:]`, `| Lock:`) fügt es an der
+Cursor-Position ein — nur die **Kartennamen** tippst du selbst. Der Button
+**Notation…** öffnet die ausführliche Syntax-Referenz.
+
+Eine beratende **Prüfung** warnt unter dem Editor, wenn ein Schritt von der
+Notation abweicht — sie **blockiert nie**.
+
+> **Auto-Speichern:** Name, Archetyp, Notizen und Schritte werden kurz nach der
+> Eingabe automatisch gesichert (und immer vor einem Wechsel). Rollen, Boss und
+> Heimat-Deck speichern sofort.
+
+Die genaue Syntax findest du im Abschnitt **Kombo-Notation**.
+"""),
+
+    ("Kombo-Notation", _NOTATION_MD),
+
+    ("Daten & Updates", """\
+# Daten & Updates
+
+Alles über das Menü **„Daten"**.
+
+## Kartendaten
+
+- **Auf Updates prüfen** — günstige Abfrage, ob eine neuere Kartendatenbank
+  vorliegt.
+- **Kartendaten aktualisieren…** — lädt die Daten neu (braucht Internet). Läuft
+  im Hintergrund, legt vorher eine `.bak`-Sicherung an und aktualisiert Karten
+  per UPSERT — **deine Sammlung, Decks und Kombos bleiben unangetastet**.
+
+## App-Version
+
+- **Auf neue App-Version prüfen** — fragt bei GitHub nach einer neueren App.
+  Es gibt **keinen Auto-Updater**: Bei einer neuen Version erscheint ein Hinweis
+  mit Link zur Download-Seite. Zum Aktualisieren den alten App-Ordner durch den
+  neuen ersetzen — deine Daten bleiben erhalten (beim ersten Start einer neuen
+  Version wird die Datenbank zusätzlich gesichert).
+
+Die App prüft beim Start still auf neue Versionen; ohne Internet bleibt das
+einfach unsichtbar.
+"""),
+
+    ("Konzepte & Prinzipien", """\
+# Konzepte & Prinzipien
+
+Hintergrund, warum die App sich so verhält:
+
+- **Offline & eigenständig.** Nach dem einmaligen Laden der Kartendaten braucht
+  die App kein Internet (außer für Updates).
+- **Referenzdaten vs. Benutzerdaten.** Karten sind Referenz; Sammlung, Decks,
+  Übersetzungen und Kombos sind deine Daten. Diese Trennung erlaubt gefahrlose
+  Karten-Updates.
+- **Hinweisen statt blockieren.** Bestands-Warnungen im Deck, die Notations-
+  Prüfung in Kombos und die Sammlungs-Abgleiche **warnen nur** — du behältst
+  die Kontrolle (z. B. für geplante Käufe).
+- **Erklärbar statt opak.** Kartenvorschläge tragen immer ihre Begründung. Die
+  App liefert Struktur und Mathematik rund um deine Kombos — sie **löst nicht
+  das Spiel** und leitet keine Kombos aus dem Kartentext her.
+- **Du lieferst die Daten.** Kombos und Referenz-Decks pflegst du selbst; die
+  App scrapt nichts.
+"""),
+]
+
+
+class HelpView(QWidget):
+    """Benutzerhandbuch als eigener Tab: links die Abschnittsliste, rechts der
+    gewaehlte Abschnitt als gerenderter Text. Rein statisch (kein Repo-Zugriff),
+    daher kein refresh()."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self.index = QListWidget()
+        for title, _md in _MANUAL_SECTIONS:
+            self.index.addItem(QListWidgetItem(title))
+        self.index.currentRowChanged.connect(self._show_section)
+        splitter.addWidget(self.index)
+
+        self.content = QTextBrowser()
+        self.content.setOpenExternalLinks(True)
+        splitter.addWidget(self.content)
+        splitter.setSizes([240, 760])
+
+        outer = QVBoxLayout(self)
+        outer.addWidget(splitter)
+        self.index.setCurrentRow(0)
+
+    def _show_section(self, row: int) -> None:
+        if 0 <= row < len(_MANUAL_SECTIONS):
+            self.content.setMarkdown(_MANUAL_SECTIONS[row][1])
+            self.content.verticalScrollBar().setValue(0)
+
+
+# ---------------------------------------------------------------------------
 # Hauptfenster
 # ---------------------------------------------------------------------------
 
@@ -2394,6 +2711,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.collection_view, "Sammlung")
         self.tabs.addTab(self.deck_view, "Deck")
         self.tabs.addTab(self.combo_view, "Kombos")
+        self.tabs.addTab(HelpView(), "Handbuch")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
         self._build_data_menu()
@@ -2455,6 +2773,7 @@ class MainWindow(QMainWindow):
 
         self.only_coll = QCheckBox("Nur meine Sammlung")
         search_btn = QPushButton("Suchen")
+        search_btn.setObjectName("primary")  # goldener Primaer-Button (Theme)
         search_btn.clicked.connect(self.search)
 
         # Aenderungen an Filtern loesen direkt eine neue Suche aus.
@@ -2746,8 +3065,161 @@ class MainWindow(QMainWindow):
         self.combo_view.refresh()
 
 
+# ---------------------------------------------------------------------------
+# Theme: dunkles Violett/Gold ("Yu-Gi-Oh"). Fusion-Style als neutrale Basis,
+# darueber eine dunkle Palette (faerbt auch vom Style gemalte Teile wie Menue-
+# Pfeile/Checkboxen) und ein durchgaengiges Stylesheet. Eine Stelle fuer die
+# komplette Optik -- Views selbst bleiben stylefrei.
+# ---------------------------------------------------------------------------
+
+# Farb-Tokens (eine Quelle der Wahrheit; im QSS unten als Literale wiederholt,
+# da Qt-Stylesheets keine Variablen kennen).
+_BG        = "#1a1426"   # Fenster-Hintergrund (dunkelviolett)
+_PANEL     = "#241a33"   # Panels / Buttons / Header
+_BASE      = "#1f1830"   # Eingabefelder / Listen / Tabellen
+_HOVER     = "#2c2140"   # Hover-Flaeche
+_BORDER    = "#3a2f4d"   # Rahmen
+_BORDER_HI = "#4a3d5e"   # hellerer Rahmen (Buttons)
+_TEXT      = "#efe9f5"   # Haupttext
+_TEXT_DIM  = "#9b90b5"   # gedaempfter Text
+_DISABLED  = "#6b6280"   # deaktiviert
+_GOLD      = "#d4af37"   # Akzent
+_GOLD_HI   = "#e6c34d"   # Akzent hell (Hover)
+
+
+def _build_palette() -> QPalette:
+    pal = QPalette()
+    C = QColor
+    pal.setColor(QPalette.ColorRole.Window, C(_BG))
+    pal.setColor(QPalette.ColorRole.WindowText, C(_TEXT))
+    pal.setColor(QPalette.ColorRole.Base, C(_BASE))
+    pal.setColor(QPalette.ColorRole.AlternateBase, C(_PANEL))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, C(_PANEL))
+    pal.setColor(QPalette.ColorRole.ToolTipText, C(_TEXT))
+    pal.setColor(QPalette.ColorRole.Text, C(_TEXT))
+    pal.setColor(QPalette.ColorRole.Button, C(_PANEL))
+    pal.setColor(QPalette.ColorRole.ButtonText, C(_TEXT))
+    pal.setColor(QPalette.ColorRole.BrightText, C(_GOLD_HI))
+    pal.setColor(QPalette.ColorRole.Link, C(_GOLD))
+    pal.setColor(QPalette.ColorRole.Highlight, C(_GOLD))
+    pal.setColor(QPalette.ColorRole.HighlightedText, C(_BG))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, C("#8a7fa6"))
+    dis = C(_DISABLED)
+    for role in (
+        QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+    ):
+        pal.setColor(QPalette.ColorGroup.Disabled, role, dis)
+    return pal
+
+
+_THEME_QSS = """
+QWidget { font-size: 10pt; }
+
+/* Tabs: gold unterstrichener aktiver Reiter, dezent sonst */
+QTabWidget::pane { border-top: 1px solid #3a2f4d; }
+QTabBar::tab {
+    background: transparent; color: #9b90b5;
+    padding: 7px 16px; border: none; border-bottom: 2px solid transparent;
+}
+QTabBar::tab:hover { color: #efe9f5; }
+QTabBar::tab:selected { color: #d4af37; border-bottom: 2px solid #d4af37; }
+
+/* Buttons: violette Pillen, Gold-Akzent bei Hover */
+QPushButton {
+    background: #2c2140; color: #efe9f5;
+    border: 1px solid #4a3d5e; border-radius: 5px; padding: 5px 12px;
+}
+QPushButton:hover { border-color: #d4af37; color: #f5e8b8; }
+QPushButton:pressed { background: #241a33; }
+QPushButton:disabled { color: #6b6280; border-color: #332a45; }
+QPushButton#primary {
+    background: #d4af37; color: #1a1426; border: none; font-weight: bold;
+}
+QPushButton#primary:hover { background: #e6c34d; }
+QPushButton#primary:disabled { background: #5a4f33; color: #3a3326; }
+
+/* Eingaben & Listen */
+QLineEdit, QComboBox, QSpinBox, QTextEdit, QTextBrowser,
+QListWidget, QTableWidget {
+    background: #1f1830; border: 1px solid #3a2f4d; border-radius: 4px;
+    selection-background-color: #d4af37; selection-color: #1a1426;
+}
+QLineEdit, QComboBox, QSpinBox { padding: 4px 6px; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
+QTextEdit:focus, QTextBrowser:focus, QListWidget:focus, QTableWidget:focus {
+    border-color: #d4af37;
+}
+QComboBox QAbstractItemView {
+    background: #241a33; border: 1px solid #3a2f4d;
+    selection-background-color: #d4af37; selection-color: #1a1426;
+}
+QListWidget::item, QTableWidget::item { padding: 3px 4px; }
+QListWidget::item:hover, QTableWidget::item:hover { background: #2c2140; }
+QListWidget::item:selected, QTableWidget::item:selected {
+    background: #d4af37; color: #1a1426;
+}
+
+/* Tabellen-Kopf */
+QHeaderView::section {
+    background: #241a33; color: #cbb6e0; padding: 4px 6px; border: none;
+    border-right: 1px solid #3a2f4d; border-bottom: 1px solid #3a2f4d;
+}
+QTableWidget { gridline-color: #3a2f4d; }
+QTableCornerButton::section { background: #241a33; border: none; }
+
+/* Gruppenrahmen mit goldenem Titel */
+QGroupBox {
+    border: 1px solid #3a2f4d; border-radius: 6px;
+    margin-top: 10px; padding-top: 6px; font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; subcontrol-position: top left;
+    left: 10px; padding: 0 4px; color: #d4af37;
+}
+
+/* Menue */
+QMenuBar { background: #1a1426; color: #efe9f5; }
+QMenuBar::item { padding: 4px 10px; background: transparent; }
+QMenuBar::item:selected { background: #2c2140; color: #d4af37; }
+QMenu { background: #241a33; border: 1px solid #3a2f4d; }
+QMenu::item { padding: 5px 22px; }
+QMenu::item:selected { background: #d4af37; color: #1a1426; }
+QMenu::separator { height: 1px; background: #3a2f4d; margin: 4px 8px; }
+
+/* Splitter, Scrollbalken, Fortschritt, Tooltip */
+QSplitter::handle { background: #3a2f4d; }
+QSplitter::handle:horizontal { width: 2px; }
+QSplitter::handle:vertical { height: 2px; }
+QScrollBar:vertical { background: #1a1426; width: 12px; margin: 0; }
+QScrollBar:horizontal { background: #1a1426; height: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: #4a3d5e; border-radius: 6px; min-height: 24px; }
+QScrollBar::handle:horizontal { background: #4a3d5e; border-radius: 6px; min-width: 24px; }
+QScrollBar::handle:hover { background: #d4af37; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QProgressBar {
+    border: 1px solid #3a2f4d; border-radius: 4px;
+    text-align: center; background: #1f1830; color: #efe9f5;
+}
+QProgressBar::chunk { background: #d4af37; border-radius: 3px; }
+QToolTip {
+    background: #241a33; color: #efe9f5;
+    border: 1px solid #d4af37; padding: 3px;
+}
+"""
+
+
+def apply_theme(app: QApplication) -> None:
+    """Dunkles Violett/Gold-Theme auf die App legen (Style + Palette + QSS)."""
+    app.setStyle("Fusion")
+    app.setPalette(_build_palette())
+    app.setStyleSheet(_THEME_QSS)
+
+
 def main() -> None:
     app = QApplication(sys.argv)
+    apply_theme(app)
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
