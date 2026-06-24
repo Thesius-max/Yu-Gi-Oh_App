@@ -176,13 +176,9 @@ _GROUP_HEADER_BG = QColor("#241a33")  # = _PANEL
 _GROUP_HEADER_FG = QColor("#d4af37")  # = _GOLD
 
 # Anzeigenamen der Baustein-Rollen (die Begriffe sind im deutschen
-# Yu-Gi-Oh-Sprachgebrauch etabliert, daher unübersetzt).
-_ROLE_DE: dict[str, str] = {
-    "starter":  "Starter",
-    "extender": "Extender",
-    "payoff":   "Payoff",
-    "handtrap": "Handtrap",
-}
+# Yu-Gi-Oh-Sprachgebrauch etabliert, daher unübersetzt). Eine Quelle der
+# Wahrheit liegt bei den Rollen selbst in der Datenschicht.
+_ROLE_DE = ydb.ROLE_LABEL
 # Zweiter Daten-Slot an Bausteine-Listeneinträgen: die Rolle (UserRole = card_id).
 _PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
 
@@ -2831,7 +2827,12 @@ class MainWindow(QMainWindow):
         for c in cards:
             stat = ""
             if c["atk"] is not None:
-                stat = f"  [ATK {c['atk']} / DEF {c['def']}]"
+                # Link-Monster haben keine DEF (def ist NULL) -> nicht "None"
+                # anzeigen, wie auch DetailPanel.show_card.
+                if c["def"] is not None:
+                    stat = f"  [ATK {c['atk']} / DEF {c['def']}]"
+                else:
+                    stat = f"  [ATK {c['atk']}]"
             item = QListWidgetItem(f"{c['name_de'] or c['name']}{stat}")
             item.setData(Qt.ItemDataRole.UserRole, c["id"])
             self.results.addItem(item)

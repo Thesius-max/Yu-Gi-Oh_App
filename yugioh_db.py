@@ -1815,7 +1815,9 @@ def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
         conn.close()
 
 
-_ROLE_LABEL = {
+# Anzeigenamen der Baustein-Rollen (siehe COMBO_ROLES). Oeffentlich, weil die
+# GUI dieselbe Beschriftung nutzt -- eine Quelle der Wahrheit.
+ROLE_LABEL = {
     "starter": "Starter", "extender": "Extender",
     "payoff": "Payoff", "handtrap": "Handtrap",
 }
@@ -1857,7 +1859,7 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
     if stats["deck_size"] and stats["roles"].get("starter"):
         lines += ["", "== Konsistenz =="]
         lines.append("Kopien im Main: " + " · ".join(
-            f"{_ROLE_LABEL[r]} {stats['roles'][r]}"
+            f"{ROLE_LABEL[r]} {stats['roles'][r]}"
             for r in COMBO_ROLES if stats["roles"].get(r)
         ))
         for hand, p in stats["hands"].items():
@@ -1874,7 +1876,7 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
             if not cards:
                 continue
             total = sum(c["copies"] for c in cards)
-            lines.append(f"{_ROLE_LABEL[role]} ({total}):")
+            lines.append(f"{ROLE_LABEL[role]} ({total}):")
             lines += [f"  {c['copies']}x {c['name']}" for c in cards]
 
     lines += ["", "== Kombo-Linien (nach Abdeckung im Deck) =="]
@@ -1906,7 +1908,7 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
             lines.append("   Bausteine:")
         for p in cov["pieces"]:
             role = roles.get(p["card_id"])
-            tag = f"  [{_ROLE_LABEL[role]}]" if role else ""
+            tag = f"  [{ROLE_LABEL[role]}]" if role else ""
             if p["missing"] == 0:
                 gap = ""
             elif p["have"] == 0:
