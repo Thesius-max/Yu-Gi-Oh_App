@@ -169,7 +169,11 @@ _CATEGORY_DE: dict[str, str] = {
     "other":   "Sonstige",
 }
 _CATEGORY_ORDER = ("monster", "spell", "trap", "other")
-_GROUP_HEADER_BG = QColor("#d8d8d8")  # dezente Kopfzeile in der Sammlungstabelle
+# Kopfzeile in der Sammlungstabelle -- Tokens passend zum dunklen Theme
+# (Panel-Hintergrund, Gold-Text); Literale wie im QSS, da hier vor den
+# Theme-Konstanten definiert.
+_GROUP_HEADER_BG = QColor("#241a33")  # = _PANEL
+_GROUP_HEADER_FG = QColor("#d4af37")  # = _GOLD
 
 # Anzeigenamen der Baustein-Rollen (die Begriffe sind im deutschen
 # Yu-Gi-Oh-Sprachgebrauch etabliert, daher unübersetzt).
@@ -760,6 +764,7 @@ class CollectionView(QWidget):
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         font = item.font(); font.setBold(True); item.setFont(font)
         item.setBackground(_GROUP_HEADER_BG)
+        item.setForeground(_GROUP_HEADER_FG)
         self.table.setItem(r, 0, item)
         self.table.setSpan(r, 0, 1, len(self.COLUMNS))
 
