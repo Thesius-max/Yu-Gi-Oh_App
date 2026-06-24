@@ -315,7 +315,13 @@ CREATE TABLE IF NOT EXISTS combos (
     boss_card_id INTEGER REFERENCES cards(id),  -- Zielmonster der Kombo (optional)
     -- Heimat-Deck: nur eine Verknuepfung (Filter/Komfort), KEIN Besitz --
     -- jede Kombo bleibt gegen jedes Deck abgleichbar (Bibliothek-Prinzip).
-    deck_id      INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL
+    deck_id      INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL,
+    -- Variante/Verzweigung: zeigt auf die Hauptlinie (Interruption-Branch).
+    -- NULL = eigenstaendige Hauptlinie. Struktur bewusst zweistufig
+    -- (Hauptlinie -> Varianten). Nur Hauptlinien zaehlen in Abdeckung,
+    -- Vorschlaegen, Synergie und Fahrplan; Varianten sind Dokumentation.
+    -- ON DELETE CASCADE: mit der Hauptlinie verschwinden ihre Branches.
+    parent_combo_id INTEGER REFERENCES combos(combo_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS combo_cards (
@@ -364,6 +370,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("cards", "desc_de", "TEXT"),
         ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
         ("combos", "deck_id", "INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL"),
+        ("combos", "parent_combo_id",
+         "INTEGER REFERENCES combos(combo_id) ON DELETE CASCADE"),
         ("combo_cards", "role", "TEXT"),
         ("decks", "kind", "TEXT"),
         ("decks", "source", "TEXT"),
@@ -1328,16 +1336,19 @@ def create_combo(
 
 
 def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row]:
-    """Alle Kombos, optional nach Heimat-Deck gefiltert:
-    deck_id=None -> alle, deck_id=0 -> nur ohne Heimat-Deck, sonst das Deck."""
+    """Hauptlinien (parent_combo_id IS NULL), optional nach Heimat-Deck
+    gefiltert: deck_id=None -> alle, deck_id=0 -> nur ohne Heimat-Deck, sonst
+    das Deck. Varianten haengen an ihrer Hauptlinie (siehe combo_variants) und
+    erscheinen hier bewusst nicht direkt."""
     sql = """SELECT cb.combo_id, cb.name, cb.archetype, cb.deck_id,
                     d.name AS deck_name
-             FROM combos cb LEFT JOIN decks d ON d.deck_id = cb.deck_id"""
+             FROM combos cb LEFT JOIN decks d ON d.deck_id = cb.deck_id
+             WHERE cb.parent_combo_id IS NULL"""
     args: tuple = ()
     if deck_id == 0:
-        sql += " WHERE cb.deck_id IS NULL"
+        sql += " AND cb.deck_id IS NULL"
     elif deck_id is not None:
-        sql += " WHERE cb.deck_id = ?"
+        sql += " AND cb.deck_id = ?"
         args = (deck_id,)
     sql += " ORDER BY cb.name"
     with _conn(db_path) as conn:
@@ -1349,10 +1360,12 @@ def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
         return conn.execute(
             """SELECT cb.combo_id, cb.name, cb.archetype, cb.notes,
                       cb.boss_card_id, b.name AS boss_name,
-                      cb.deck_id, d.name AS deck_name
+                      cb.deck_id, d.name AS deck_name,
+                      cb.parent_combo_id, p.name AS parent_name
                FROM combos cb
                LEFT JOIN cards b ON b.id = cb.boss_card_id
                LEFT JOIN decks d ON d.deck_id = cb.deck_id
+               LEFT JOIN combos p ON p.combo_id = cb.parent_combo_id
                WHERE cb.combo_id = ?""",
             (combo_id,),
         ).fetchone()
@@ -1366,6 +1379,54 @@ def set_combo_deck(db_path: str, combo_id: int, deck_id: Optional[int]) -> None:
             (deck_id, combo_id),
         )
         conn.commit()
+
+
+def set_combo_parent(
+    db_path: str, combo_id: int, parent_id: Optional[int]
+) -> None:
+    """Macht combo_id zur Variante (Branch) von parent_id; parent_id=None
+    loest die Verknuepfung (wird wieder Hauptlinie). Haelt die Struktur
+    bewusst ZWEISTUFIG: die Hauptlinie muss selbst eine Hauptlinie sein, und
+    eine Kombo mit eigenen Varianten kann nicht selbst Variante werden.
+    Dadurch sind Selbst-/Zyklus-Verknuepfungen ausgeschlossen.
+    Wirft ValueError, wenn die Regeln verletzt wuerden."""
+    if parent_id is not None and parent_id == combo_id:
+        raise ValueError("Eine Kombo kann keine Variante ihrer selbst sein.")
+    with _conn(db_path) as conn:
+        if parent_id is not None:
+            prow = conn.execute(
+                "SELECT parent_combo_id FROM combos WHERE combo_id = ?",
+                (parent_id,),
+            ).fetchone()
+            if prow is None:
+                raise ValueError("Hauptlinie nicht gefunden.")
+            if prow["parent_combo_id"] is not None:
+                raise ValueError(
+                    "Die gewaehlte Kombo ist selbst eine Variante."
+                )
+            if conn.execute(
+                "SELECT 1 FROM combos WHERE parent_combo_id = ? LIMIT 1",
+                (combo_id,),
+            ).fetchone():
+                raise ValueError(
+                    "Diese Kombo hat eigene Varianten und kann nicht selbst "
+                    "Variante werden."
+                )
+        conn.execute(
+            "UPDATE combos SET parent_combo_id = ? WHERE combo_id = ?",
+            (parent_id, combo_id),
+        )
+        conn.commit()
+
+
+def combo_variants(db_path: str, combo_id: int) -> list[sqlite3.Row]:
+    """Varianten (Branches) einer Hauptlinie, nach Name."""
+    with _conn(db_path) as conn:
+        return conn.execute(
+            "SELECT combo_id, name, archetype FROM combos "
+            "WHERE parent_combo_id = ? ORDER BY name",
+            (combo_id,),
+        ).fetchall()
 
 
 def update_combo(
@@ -1559,7 +1620,8 @@ def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
     Eine Verbindung fuer alle Kombos (kein N+1)."""
     with _conn(db_path) as conn:
         combos = conn.execute(
-            "SELECT combo_id, name, archetype FROM combos ORDER BY name"
+            "SELECT combo_id, name, archetype FROM combos "
+            "WHERE parent_combo_id IS NULL ORDER BY name"
         ).fetchall()
         out = []
         for cb in combos:
@@ -1590,6 +1652,8 @@ def deck_role_summary(db_path: str, deck_id: int) -> dict[str, list[dict]]:
                JOIN cards c ON c.id = dc.card_id
                WHERE dc.deck_id = ? AND dc.zone IN ('main', 'extra')
                  AND cc.role IS NOT NULL
+                 AND cc.combo_id IN (SELECT combo_id FROM combos
+                                     WHERE parent_combo_id IS NULL)
                ORDER BY name""",
             (deck_id,),
         ).fetchall()
@@ -1643,7 +1707,8 @@ def combos_for_collection(db_path: str) -> list[dict]:
     Eine Verbindung fuer alle Kombos (kein N+1)."""
     with _conn(db_path) as conn:
         combos = conn.execute(
-            "SELECT combo_id, name, archetype FROM combos ORDER BY name"
+            "SELECT combo_id, name, archetype FROM combos "
+            "WHERE parent_combo_id IS NULL ORDER BY name"
         ).fetchall()
         out = []
         for cb in combos:
@@ -1726,6 +1791,8 @@ def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
                    JOIN combo_cards cc ON cc.card_id = dc.card_id
                    WHERE dc.deck_id = ? AND dc.zone = 'main'
                      AND cc.role IS NOT NULL
+                     AND cc.combo_id IN (SELECT combo_id FROM combos
+                                         WHERE parent_combo_id IS NULL)
                ) GROUP BY role""",
             (deck_id,),
         ).fetchall()
@@ -1834,6 +1901,17 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
         if steps:
             lines.append("   Schritte:")
             lines += [f"     {s['step_no']}. {s['text']}" for s in steps]
+        # Varianten (Interruption-Branches) unter der Hauptlinie auffuehren.
+        for var in combo_variants(db_path, cb["combo_id"]):
+            lines += ["", f"   ↳ Variante: {var['name']}"]
+            vcombo = get_combo(db_path, var["combo_id"])
+            if vcombo["notes"]:
+                lines += [
+                    f"     {ln.strip()}"
+                    for ln in vcombo["notes"].splitlines() if ln.strip()
+                ]
+            vsteps = combo_steps(db_path, var["combo_id"])
+            lines += [f"     {s['step_no']}. {s['text']}" for s in vsteps]
     if count == 0:
         lines.append("(Keine Kombos mit Bausteinen aus diesem Deck erfasst.)")
     return "\n".join(lines) + "\n"
@@ -1876,7 +1954,10 @@ def deck_main_cards(db_path: str, deck_id: int) -> list[dict]:
         ).fetchall()
         role_rows = conn.execute(
             """SELECT DISTINCT cc.card_id, cc.role FROM combo_cards cc
-               WHERE cc.role IS NOT NULL AND cc.card_id IN
+               WHERE cc.role IS NOT NULL
+                 AND cc.combo_id IN (SELECT combo_id FROM combos
+                                     WHERE parent_combo_id IS NULL)
+                 AND cc.card_id IN
                    (SELECT card_id FROM deck_cards
                     WHERE deck_id = ? AND zone = 'main')""",
             (deck_id,),
@@ -1939,7 +2020,11 @@ def synergy_edges(db_path: str) -> dict[tuple[int, int], dict]:
     zusaetzliche Kanten in denselben Graphen ein.
     Rueckgabe: {(a, b): {'weight': n, 'combos': [combo_id, ...]}} mit a < b."""
     with _conn(db_path) as conn:
-        rows = conn.execute("SELECT combo_id, card_id FROM combo_cards").fetchall()
+        rows = conn.execute(
+            "SELECT cc.combo_id, cc.card_id FROM combo_cards cc "
+            "JOIN combos cb ON cb.combo_id = cc.combo_id "
+            "WHERE cb.parent_combo_id IS NULL"
+        ).fetchall()
     members: dict[int, set[int]] = {}
     for r in rows:
         members.setdefault(r["combo_id"], set()).add(r["card_id"])
@@ -2057,7 +2142,8 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
         ).fetchall()
         combo_rows = conn.execute(
             """SELECT cc.combo_id, cb.name AS combo_name, cc.card_id, cc.role
-               FROM combo_cards cc JOIN combos cb ON cb.combo_id = cc.combo_id"""
+               FROM combo_cards cc JOIN combos cb ON cb.combo_id = cc.combo_id
+               WHERE cb.parent_combo_id IS NULL"""
         ).fetchall()
         card_ids = {r["card_id"] for r in combo_rows}
         names = _card_names(conn, card_ids)

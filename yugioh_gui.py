@@ -1987,9 +1987,12 @@ class ComboView(QWidget):
         btn_row = QHBoxLayout()
         new_btn = QPushButton("Neue Kombo")
         new_btn.clicked.connect(self._new_combo)
+        var_btn = QPushButton("Neue Variante…")
+        var_btn.clicked.connect(self._new_variant)
         del_btn = QPushButton("Löschen")
         del_btn.clicked.connect(self._delete_combo)
         btn_row.addWidget(new_btn)
+        btn_row.addWidget(var_btn)
         btn_row.addWidget(del_btn)
         lv.addLayout(btn_row)
 
@@ -2007,6 +2010,10 @@ class ComboView(QWidget):
         # Speichert sofort, wie Rollen und Boss.
         self.home_cb = QComboBox()
         self.home_cb.currentIndexChanged.connect(self._on_home_changed)
+        # Variante-von: macht diese Kombo zum Branch einer Hauptlinie
+        # (Interruption-Verzweigung). Speichert sofort, wie Boss/Heimat-Deck.
+        self.parent_cb = QComboBox()
+        self.parent_cb.currentIndexChanged.connect(self._on_parent_changed)
         # Notizen tragen die Rahmendaten der Notation (Start/End), die nicht
         # in die Schritte gehoeren.
         self.notes_edit = QTextEdit()
@@ -2019,6 +2026,7 @@ class ComboView(QWidget):
         form.addRow("Archetyp", self.arch_edit)
         form.addRow("Heimat-Deck", self.home_cb)
         form.addRow("Boss", self.boss_cb)
+        form.addRow("Variante von", self.parent_cb)
         form.addRow("Notizen", self.notes_edit)
         rv.addLayout(form)
 
@@ -2123,6 +2131,11 @@ class ComboView(QWidget):
             item = QListWidgetItem(self._combo_label(c))
             item.setData(Qt.ItemDataRole.UserRole, c["combo_id"])
             self.combo_list.addItem(item)
+            # Varianten (Branches) eingerückt direkt unter der Hauptlinie.
+            for v in ydb.combo_variants(self.repo.db_path, c["combo_id"]):
+                vitem = QListWidgetItem(self._variant_label(v))
+                vitem.setData(Qt.ItemDataRole.UserRole, v["combo_id"])
+                self.combo_list.addItem(vitem)
         self.combo_list.blockSignals(False)
         if keep is not None and self._select_combo(keep):
             return
@@ -2175,6 +2188,12 @@ class ComboView(QWidget):
             mark = f"   ({cov['covered']}/{cov['total']})"
         return f"{combo['name']}{arch}{deck}{mark}"
 
+    @staticmethod
+    def _variant_label(combo) -> str:
+        """Eingerückter Listentext einer Variante (Name + Archetyp)."""
+        arch = f"   [{combo['archetype']}]" if combo["archetype"] else ""
+        return f"    ↳ {combo['name']}{arch}"
+
     def _select_combo(self, combo_id: int) -> bool:
         for i in range(self.combo_list.count()):
             if self.combo_list.item(i).data(Qt.ItemDataRole.UserRole) == combo_id:
@@ -2189,7 +2208,11 @@ class ComboView(QWidget):
         if item is None or self.combo_id is None:
             return
         combo = ydb.get_combo(self.repo.db_path, self.combo_id)
-        if combo is not None:
+        if combo is None:
+            return
+        if combo["parent_combo_id"] is not None:
+            item.setText(self._variant_label(combo))
+        else:
             item.setText(self._combo_label(combo))
 
     def _refresh_collection_coverage(self) -> None:
@@ -2236,6 +2259,7 @@ class ComboView(QWidget):
         self._loading = False
         self._update_lint()
         self._populate_home_deck(combo)
+        self._populate_parent(combo)
         self._load_pieces()
         self._refresh_collection_coverage()
         self.editor.setEnabled(True)
@@ -2250,6 +2274,9 @@ class ComboView(QWidget):
         self.home_cb.blockSignals(True)
         self.home_cb.clear()
         self.home_cb.blockSignals(False)
+        self.parent_cb.blockSignals(True)
+        self.parent_cb.clear()
+        self.parent_cb.blockSignals(False)
         self.pieces.clear()
         self.notes_edit.clear()
         self.steps_edit.clear()
@@ -2331,6 +2358,47 @@ class ComboView(QWidget):
         # aktiven Filter, raeumt erst der naechste refresh() auf.
         self._update_current_label()
 
+    def _populate_parent(self, combo) -> None:
+        """'Variante von'-Auswahl füllen: alle Hauptlinien außer dieser. Hat
+        die Kombo selbst Varianten, kann sie keine Variante werden -> Feld
+        gesperrt auf '(keine)'."""
+        self.parent_cb.blockSignals(True)
+        self.parent_cb.clear()
+        self.parent_cb.addItem("(keine — Hauptlinie)", None)
+        has_children = bool(ydb.combo_variants(self.repo.db_path, self.combo_id))
+        if has_children:
+            self.parent_cb.setEnabled(False)
+            self.parent_cb.setCurrentIndex(0)
+            self.parent_cb.blockSignals(False)
+            return
+        self.parent_cb.setEnabled(True)
+        for c in ydb.list_combos(self.repo.db_path):  # nur Hauptlinien
+            if c["combo_id"] != self.combo_id:
+                self.parent_cb.addItem(c["name"], c["combo_id"])
+        if combo is not None and combo["parent_combo_id"] is not None:
+            idx = self.parent_cb.findData(combo["parent_combo_id"])
+            if idx < 0:  # Heimat-Deck-Filter o.ä. -- Parent trotzdem zeigen
+                self.parent_cb.addItem(
+                    combo["parent_name"] or "?", combo["parent_combo_id"]
+                )
+                idx = self.parent_cb.count() - 1
+            self.parent_cb.setCurrentIndex(idx)
+        self.parent_cb.blockSignals(False)
+
+    def _on_parent_changed(self, _index: int) -> None:
+        if self.combo_id is None:
+            return
+        try:
+            ydb.set_combo_parent(
+                self.repo.db_path, self.combo_id, self.parent_cb.currentData()
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Variante", str(exc))
+        # Nesting in der Liste neu aufbauen, Kombo wieder auswählen.
+        cid = self.combo_id
+        self.refresh()
+        self._select_combo(cid)
+
     def _on_piece_selected(self, current: QListWidgetItem, _previous=None) -> None:
         # Rollen-Dropdown auf den gewählten Baustein stellen, ohne dabei
         # ein Speichern auszulösen.
@@ -2375,13 +2443,44 @@ class ComboView(QWidget):
             self.refresh()
             self._select_combo(combo_id)
 
+    def _new_variant(self) -> None:
+        """Variante (Branch) der aktuell gewählten Hauptlinie anlegen."""
+        if self.combo_id is None or not self.repo.exists():
+            return
+        parent = ydb.get_combo(self.repo.db_path, self.combo_id)
+        if parent["parent_combo_id"] is not None:
+            QMessageBox.information(
+                self, "Neue Variante",
+                "Varianten hängen an einer Hauptlinie. Wähle zuerst die "
+                "Hauptlinie aus (nicht eine ihrer Varianten).",
+            )
+            return
+        name, ok = QInputDialog.getText(
+            self, "Neue Variante", "Name der Variante:",
+            text=f"{parent['name']} – Variante",
+        )
+        if not (ok and name.strip()):
+            return
+        parent_id = self.combo_id
+        # Variante erbt das Heimat-Deck der Hauptlinie (bleibt im Filter sichtbar).
+        child = ydb.create_combo(
+            self.repo.db_path, name.strip(), deck_id=parent["deck_id"]
+        )
+        ydb.set_combo_parent(self.repo.db_path, child, parent_id)
+        self.refresh()
+        self._select_combo(child)
+
     def _delete_combo(self) -> None:
         if self.combo_id is None:
             return
-        reply = QMessageBox.question(
-            self, "Kombo löschen",
-            f"Kombo '{self.name_edit.text()}' löschen?",
-        )
+        variants = ydb.combo_variants(self.repo.db_path, self.combo_id)
+        msg = f"Kombo '{self.name_edit.text()}' löschen?"
+        if variants:
+            msg += (
+                f"\n\nAchtung: {len(variants)} Variante(n) hängen daran und "
+                "werden mitgelöscht."
+            )
+        reply = QMessageBox.question(self, "Kombo löschen", msg)
         if reply == QMessageBox.StandardButton.Yes:
             # Offene Eingaben verwerfen -- sie gehoeren zur geloeschten Kombo.
             self._save_timer.stop()

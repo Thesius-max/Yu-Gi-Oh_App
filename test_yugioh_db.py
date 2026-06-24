@@ -330,6 +330,62 @@ class DbTests(unittest.TestCase):
         self.assertEqual(cards[self.main_id]["copies"], 3)
         self.assertIn("starter", cards[self.main_id]["roles"])
 
+    # -- Kombo-Varianten (Branches) ---------------------------------------
+
+    def test_variant_link_and_listing(self):
+        parent = ydb.create_combo(self.db, "Hauptlinie")
+        child = ydb.create_combo(self.db, "Variante")
+        ydb.set_combo_parent(self.db, child, parent)
+        got = ydb.get_combo(self.db, child)
+        self.assertEqual(got["parent_combo_id"], parent)
+        self.assertEqual(got["parent_name"], "Hauptlinie")
+        # Variante haengt unter der Hauptlinie ...
+        self.assertEqual(
+            [v["combo_id"] for v in ydb.combo_variants(self.db, parent)], [child]
+        )
+        # ... und taucht nicht in der Hauptlinien-Liste auf.
+        ids = [c["combo_id"] for c in ydb.list_combos(self.db)]
+        self.assertIn(parent, ids)
+        self.assertNotIn(child, ids)
+
+    def test_set_combo_parent_guards(self):
+        a = ydb.create_combo(self.db, "A")
+        b = ydb.create_combo(self.db, "B")
+        c = ydb.create_combo(self.db, "C")
+        with self.assertRaises(ValueError):       # Selbst-Verknuepfung
+            ydb.set_combo_parent(self.db, a, a)
+        ydb.set_combo_parent(self.db, b, a)       # B wird Variante von A
+        with self.assertRaises(ValueError):       # parent darf keine Variante sein
+            ydb.set_combo_parent(self.db, c, b)
+        with self.assertRaises(ValueError):       # A hat Varianten -> nicht selbst Variante
+            ydb.set_combo_parent(self.db, a, c)
+
+    def test_variant_excluded_from_aggregates(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=1)
+        parent = ydb.create_combo(self.db, "Haupt")
+        ydb.add_combo_card(self.db, parent, self.main_id, 1)
+        ydb.add_combo_card(self.db, parent, self.main_id2, 1)
+        variant = ydb.create_combo(self.db, "Var")
+        ydb.add_combo_card(self.db, variant, self.main_id, 1)
+        ydb.add_combo_card(self.db, variant, self.extra_id, 1)
+        ydb.set_combo_parent(self.db, variant, parent)
+        # combos_for_deck zaehlt nur die Hauptlinie.
+        deck_combo_ids = [c["combo_id"] for c in ydb.combos_for_deck(self.db, deck)]
+        self.assertIn(parent, deck_combo_ids)
+        self.assertNotIn(variant, deck_combo_ids)
+        # Synergie-Kanten der Variante (main_id<->extra_id) entstehen nicht.
+        edges = ydb.synergy_edges(self.db)
+        pair = tuple(sorted((self.main_id, self.extra_id)))
+        self.assertNotIn(pair, edges)
+
+    def test_delete_parent_cascades_variants(self):
+        parent = ydb.create_combo(self.db, "Haupt")
+        variant = ydb.create_combo(self.db, "Var")
+        ydb.set_combo_parent(self.db, variant, parent)
+        ydb.delete_combo(self.db, parent)
+        self.assertIsNone(ydb.get_combo(self.db, variant))   # mitgeloescht
+
     # -- Reference-Decks binden keinen Bestand ----------------------------
 
     def test_reference_deck_does_not_bind_stock(self):
