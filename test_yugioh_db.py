@@ -110,6 +110,14 @@ class DbTests(unittest.TestCase):
                 "SELECT id FROM cards WHERE frame_type IN "
                 "('fusion','synchro','xyz','link') LIMIT 1"
             ).fetchone()["id"]
+            # Karten, die garantiert NICHT im Bestand liegen (fuer
+            # deterministische Sammlungs-Abdeckung).
+            unowned = conn.execute(
+                "SELECT id FROM cards WHERE id NOT IN "
+                "(SELECT card_id FROM collection) LIMIT 2"
+            ).fetchall()
+            self.unowned_id = unowned[0]["id"]
+            self.unowned_id2 = unowned[1]["id"]
         finally:
             conn.close()
 
@@ -217,6 +225,47 @@ class DbTests(unittest.TestCase):
         ydb.add_combo_card(self.db, combo, self.main_id, 1)
         cov = ydb.combo_coverage(self.db, combo, deck)
         self.assertEqual(cov["covered"], 1)
+
+    def test_combos_for_deck_aggregates_coverage(self):
+        # Frisches Deck -> Abdeckung gegen genau dieses Deck ist deterministisch.
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=1)
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, self.main_id, 1)
+        ydb.add_combo_card(self.db, combo, self.extra_id, 1)  # nicht im Deck
+        row = next(
+            r for r in ydb.combos_for_deck(self.db, deck)
+            if r["combo_id"] == combo
+        )
+        self.assertEqual(row["total"], 2)
+        self.assertEqual(row["covered"], 1)
+        self.assertAlmostEqual(row["coverage"], 0.5)
+
+    def test_combo_coverage_collection(self):
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, self.unowned_id, 1)
+        ydb.add_combo_card(self.db, combo, self.unowned_id2, 1)
+        cov = ydb.combo_coverage_collection(self.db, combo)
+        self.assertEqual(cov["total"], 2)
+        self.assertEqual(cov["covered"], 0)         # nichts im Bestand
+        ydb.add_to_collection(self.db, self.unowned_id, 1)
+        cov = ydb.combo_coverage_collection(self.db, combo)
+        self.assertEqual(cov["covered"], 1)         # jetzt ein Baustein da
+
+    # -- Vorschlaege: Namen aufloesen -------------------------------------
+
+    def test_deck_suggestions_resolves_names(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=1)
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, self.main_id, 1)
+        ydb.add_combo_card(self.db, combo, self.main_id2, 1)  # Kandidat
+        res = ydb.deck_suggestions(self.db, deck)
+        sug = {s["card_id"]: s for s in res["suggestions"]}
+        self.assertIn(self.main_id2, sug)
+        # Name aufgeloest, nicht der Zahlen-Fallback str(id).
+        self.assertFalse(sug[self.main_id2]["name"].isdigit())
+        self.assertGreaterEqual(sug[self.main_id2]["direct"], 1)
 
     # -- Reference-Decks binden keinen Bestand ----------------------------
 

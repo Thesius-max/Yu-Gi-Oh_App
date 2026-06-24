@@ -1498,21 +1498,10 @@ def combos_for_card(db_path: str, card_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
-    """Abgleich einer Kombo mit einem Deck (Main+Extra).
-    Rueckgabe: {'total', 'covered', 'pieces': [{card_id, name, type,
-    frame_type, needed, have, missing}]}."""
-    with _conn(db_path) as conn:
-        pieces = conn.execute(
-            """SELECT cc.card_id, c.name, c.type, c.frame_type,
-                      cc.quantity AS needed,
-                      COALESCE((SELECT SUM(dc.quantity) FROM deck_cards dc
-                                WHERE dc.deck_id = ? AND dc.card_id = cc.card_id
-                                  AND dc.zone IN ('main','extra')), 0) AS have
-               FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
-               WHERE cc.combo_id = ? ORDER BY c.name""",
-            (deck_id, combo_id),
-        ).fetchall()
+def _coverage_result(pieces) -> dict:
+    """Baut die Coverage-Rueckgabe (total/covered/pieces) aus Baustein-Zeilen
+    mit den Feldern needed/have. Gemeinsame Logik von combo_coverage (gegen
+    ein Deck) und combo_coverage_collection (gegen die Sammlung)."""
     result, covered = [], 0
     for p in pieces:
         missing = max(0, p["needed"] - p["have"])
@@ -1526,18 +1515,61 @@ def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
     return {"total": len(result), "covered": covered, "pieces": result}
 
 
+def _combo_coverage_deck(conn: sqlite3.Connection, combo_id: int, deck_id: int) -> dict:
+    """Abdeckung gegen ein Deck (Main+Extra) auf einer offenen Verbindung --
+    so koennen combos_for_deck/Export sie ohne N+1-Verbindungen wiederholen."""
+    pieces = conn.execute(
+        """SELECT cc.card_id, c.name, c.type, c.frame_type,
+                  cc.quantity AS needed,
+                  COALESCE((SELECT SUM(dc.quantity) FROM deck_cards dc
+                            WHERE dc.deck_id = ? AND dc.card_id = cc.card_id
+                              AND dc.zone IN ('main','extra')), 0) AS have
+           FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
+           WHERE cc.combo_id = ? ORDER BY c.name""",
+        (deck_id, combo_id),
+    ).fetchall()
+    return _coverage_result(pieces)
+
+
+def _combo_coverage_collection(conn: sqlite3.Connection, combo_id: int) -> dict:
+    """Abdeckung gegen die Sammlung auf einer offenen Verbindung."""
+    pieces = conn.execute(
+        """SELECT cc.card_id, c.name, c.type, c.frame_type,
+                  cc.quantity AS needed,
+                  COALESCE((SELECT SUM(col.quantity) FROM collection col
+                            WHERE col.card_id = cc.card_id), 0) AS have
+           FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
+           WHERE cc.combo_id = ? ORDER BY c.name""",
+        (combo_id,),
+    ).fetchall()
+    return _coverage_result(pieces)
+
+
+def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
+    """Abgleich einer Kombo mit einem Deck (Main+Extra).
+    Rueckgabe: {'total', 'covered', 'pieces': [{card_id, name, type,
+    frame_type, needed, have, missing}]}."""
+    with _conn(db_path) as conn:
+        return _combo_coverage_deck(conn, combo_id, deck_id)
+
+
 def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
-    """Alle Kombos mit ihrer Abdeckung gegen das Deck, nach Abdeckung sortiert."""
-    out = []
-    for cb in list_combos(db_path):
-        cov = combo_coverage(db_path, cb["combo_id"], deck_id)
-        total = cov["total"]
-        out.append({
-            "combo_id": cb["combo_id"], "name": cb["name"],
-            "archetype": cb["archetype"], "total": total,
-            "covered": cov["covered"],
-            "coverage": (cov["covered"] / total) if total else 0.0,
-        })
+    """Alle Kombos mit ihrer Abdeckung gegen das Deck, nach Abdeckung sortiert.
+    Eine Verbindung fuer alle Kombos (kein N+1)."""
+    with _conn(db_path) as conn:
+        combos = conn.execute(
+            "SELECT combo_id, name, archetype FROM combos ORDER BY name"
+        ).fetchall()
+        out = []
+        for cb in combos:
+            cov = _combo_coverage_deck(conn, cb["combo_id"], deck_id)
+            total = cov["total"]
+            out.append({
+                "combo_id": cb["combo_id"], "name": cb["name"],
+                "archetype": cb["archetype"], "total": total,
+                "covered": cov["covered"],
+                "coverage": (cov["covered"] / total) if total else 0.0,
+            })
     out.sort(key=lambda x: (-x["coverage"], x["name"]))
     return out
 
@@ -1601,41 +1633,27 @@ def combo_coverage_collection(db_path: str, combo_id: int) -> dict:
     Gleiche Struktur wie combo_coverage, aber 'have' zaehlt den Bestand --
     beantwortet: 'Welche Bausteine besitze ich schon?'"""
     with _conn(db_path) as conn:
-        pieces = conn.execute(
-            """SELECT cc.card_id, c.name, c.type, c.frame_type,
-                      cc.quantity AS needed,
-                      COALESCE((SELECT SUM(col.quantity) FROM collection col
-                                WHERE col.card_id = cc.card_id), 0) AS have
-               FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
-               WHERE cc.combo_id = ? ORDER BY c.name""",
-            (combo_id,),
-        ).fetchall()
-    result, covered = [], 0
-    for p in pieces:
-        missing = max(0, p["needed"] - p["have"])
-        if missing == 0:
-            covered += 1
-        result.append({
-            "card_id": p["card_id"], "name": p["name"], "type": p["type"],
-            "frame_type": p["frame_type"], "needed": p["needed"],
-            "have": p["have"], "missing": missing,
-        })
-    return {"total": len(result), "covered": covered, "pieces": result}
+        return _combo_coverage_collection(conn, combo_id)
 
 
 def combos_for_collection(db_path: str) -> list[dict]:
-    """Alle Kombos mit ihrer Abdeckung gegen die Sammlung, nach Abdeckung sortiert.
-    Beantwortet: 'Welche Kombos kann ich mit meinen Karten bauen?'"""
-    out = []
-    for cb in list_combos(db_path):
-        cov = combo_coverage_collection(db_path, cb["combo_id"])
-        total = cov["total"]
-        out.append({
-            "combo_id": cb["combo_id"], "name": cb["name"],
-            "archetype": cb["archetype"], "total": total,
-            "covered": cov["covered"],
-            "coverage": (cov["covered"] / total) if total else 0.0,
-        })
+    """Alle Kombos mit ihrer Abdeckung gegen die Sammlung, nach Abdeckung
+    sortiert. Beantwortet: 'Welche Kombos kann ich mit meinen Karten bauen?'
+    Eine Verbindung fuer alle Kombos (kein N+1)."""
+    with _conn(db_path) as conn:
+        combos = conn.execute(
+            "SELECT combo_id, name, archetype FROM combos ORDER BY name"
+        ).fetchall()
+        out = []
+        for cb in combos:
+            cov = _combo_coverage_collection(conn, cb["combo_id"])
+            total = cov["total"]
+            out.append({
+                "combo_id": cb["combo_id"], "name": cb["name"],
+                "archetype": cb["archetype"], "total": total,
+                "covered": cov["covered"],
+                "coverage": (cov["covered"] / total) if total else 0.0,
+            })
     out.sort(key=lambda x: (-x["coverage"], x["name"]))
     return out
 
@@ -1916,6 +1934,23 @@ def corpus_edges(db_path: str) -> dict[tuple[int, int], dict]:
     return edges
 
 
+def _card_names(conn: sqlite3.Connection, ids) -> dict[int, str]:
+    """{id -> Anzeigename (DE bevorzugt)} fuer eine Menge Karten-IDs auf einer
+    offenen Verbindung. Leere Menge -> leeres dict (kein Query)."""
+    ids = tuple(ids)
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    return {
+        r["id"]: r["name"]
+        for r in conn.execute(
+            f"SELECT id, COALESCE(name_de, name) AS name FROM cards "
+            f"WHERE id IN ({ph})",
+            ids,
+        )
+    }
+
+
 def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     """Kartenvorschlaege fuer ein Deck aus dem Synergie-Graphen.
 
@@ -1945,17 +1980,7 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
                FROM combo_cards cc JOIN combos cb ON cb.combo_id = cc.combo_id"""
         ).fetchall()
         card_ids = {r["card_id"] for r in combo_rows}
-        names: dict[int, str] = {}
-        if card_ids:
-            ph = ",".join("?" * len(card_ids))
-            names = {
-                r["id"]: r["name"]
-                for r in conn.execute(
-                    f"""SELECT id, COALESCE(name_de, name) AS name
-                        FROM cards WHERE id IN ({ph})""",
-                    tuple(card_ids),
-                )
-            }
+        names = _card_names(conn, card_ids)
 
     in_deck_any = {r["card_id"] for r in deck_rows}
     deck_set = {r["card_id"] for r in deck_rows if r["zone"] in ("main", "extra")}
@@ -2011,15 +2036,7 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     missing = set(corpus_adj) - set(names)
     if missing:
         with _conn(db_path) as conn:
-            ph = ",".join("?" * len(missing))
-            names.update({
-                r["id"]: r["name"]
-                for r in conn.execute(
-                    f"""SELECT id, COALESCE(name_de, name) AS name
-                        FROM cards WHERE id IN ({ph})""",
-                    tuple(missing),
-                )
-            })
+            names.update(_card_names(conn, missing))
 
     suggestions = []
     for c in candidates:
