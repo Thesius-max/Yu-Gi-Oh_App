@@ -27,6 +27,7 @@ import itertools
 import json
 import math
 import os
+import random
 import re
 import shutil
 import sqlite3
@@ -1683,6 +1684,35 @@ def hypergeom_at_least(
     return 1.0 - misses / total
 
 
+def prob_open_all(deck_size: int, copies: Iterable[int], hand: int) -> float:
+    """Wahrscheinlichkeit, von JEDER genannten Karte mindestens eine Kopie in
+    der Starthand zu haben ('alle gewuenschten Karten zusammen oeffnen').
+
+    'copies' = Kopienzahl je verschiedener Wunschkarte (disjunkte Karten).
+    Exakt ueber Inklusion-Exklusion: P(alle da) =
+        Sum_S (-1)^|S| * C(N - Sum_{i in S} c_i, h) / C(N, h)
+    ueber alle Teilmengen S der Wunschkarten (math.comb, reine stdlib). Fuer
+    die 'mindestens eine davon'-Frage genuegt hypergeom_at_least(N, sum(c), h).
+    Unsinnige Eingaben werden gekappt statt geworfen; leere Auswahl -> 1.0
+    (keine Bedingung)."""
+    deck_size = max(0, deck_size)
+    hand = max(0, min(hand, deck_size))
+    cs = [c for c in (max(0, c) for c in copies) if c > 0]
+    if not cs:
+        return 1.0           # keine Wunschkarte -> Bedingung trivial erfuellt
+    if hand == 0:
+        return 0.0
+    total = math.comb(deck_size, hand)
+    acc = 0.0
+    for r in range(len(cs) + 1):
+        for subset in itertools.combinations(cs, r):
+            remaining = deck_size - sum(subset)
+            # remaining < hand (auch negativ bei Unsinn) -> C() = 0, kein Term.
+            term = math.comb(remaining, hand) if remaining >= hand else 0
+            acc += ((-1) ** r) * term
+    return acc / total
+
+
 def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
     """Kopien je Rolle im MAIN Deck (nur daraus wird gezogen).
     Eine Karte zaehlt je Rolle einmal, auch wenn mehrere Kombos ihr dieselbe
@@ -1827,6 +1857,56 @@ def deck_consistency(
             "brick": 1.0 - p_starter,
         }
     return {"deck_size": size, "roles": roles, "hands": hands}
+
+
+def deck_main_cards(db_path: str, deck_id: int) -> list[dict]:
+    """Verschiedene Main-Deck-Karten mit Kopienzahl und (ggf.) Rollen --
+    Grundlage fuer den Starthand-Simulator (Karten-Picker + Zufallshand).
+    Eine Karte traegt alle Rollen, die ihr in irgendeiner Kombo gegeben
+    wurden. Rueckgabe: [{'card_id', 'name', 'copies', 'roles': [...]}],
+    nach Anzeigename sortiert."""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT dc.card_id, COALESCE(c.name_de, c.name) AS name,
+                      dc.quantity AS copies
+               FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+               WHERE dc.deck_id = ? AND dc.zone = 'main'
+               ORDER BY name""",
+            (deck_id,),
+        ).fetchall()
+        role_rows = conn.execute(
+            """SELECT DISTINCT cc.card_id, cc.role FROM combo_cards cc
+               WHERE cc.role IS NOT NULL AND cc.card_id IN
+                   (SELECT card_id FROM deck_cards
+                    WHERE deck_id = ? AND zone = 'main')""",
+            (deck_id,),
+        ).fetchall()
+    roles_by: dict[int, list[str]] = {}
+    for r in role_rows:
+        roles_by.setdefault(r["card_id"], []).append(r["role"])
+    return [
+        {"card_id": r["card_id"], "name": r["name"], "copies": int(r["copies"]),
+         "roles": sorted(roles_by.get(r["card_id"], []))}
+        for r in rows
+    ]
+
+
+def draw_sample_hand(
+    db_path: str, deck_id: int, hand_size: int = 5, rng=None
+) -> list[dict]:
+    """Zieht zufaellig hand_size Karten aus dem MAIN Deck (Kopien expandiert,
+    ohne Zuruecklegen). 'rng' (random.Random) ist injizierbar -- so wird das
+    Ziehen deterministisch testbar. Handgroesse wird auf die Main-Deck-Groesse
+    gekappt. Rueckgabe: gezogene Karten [{'card_id', 'name', 'roles'}]."""
+    pool = []
+    for c in deck_main_cards(db_path, deck_id):
+        pool.extend([c] * c["copies"])
+    rng = rng or random
+    k = min(max(0, hand_size), len(pool))
+    return [
+        {"card_id": c["card_id"], "name": c["name"], "roles": c["roles"]}
+        for c in rng.sample(pool, k)
+    ]
 
 
 # ---------------------------------------------------------------------------

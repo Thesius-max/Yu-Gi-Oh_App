@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import shutil
 import sqlite3
 import tempfile
@@ -67,6 +68,31 @@ class PureFunctionTests(unittest.TestCase):
     def test_hypergeom_caps_absurd_input(self):
         # successes/draws > population werden gekappt, nicht geworfen.
         self.assertEqual(ydb.hypergeom_at_least(5, 99, 99), 1.0)
+
+    def test_prob_open_all_single_matches_hypergeom(self):
+        # Eine Wunschkarte -> identisch zu hypergeom_at_least(min_hits=1).
+        self.assertAlmostEqual(
+            ydb.prob_open_all(40, [3], 5),
+            ydb.hypergeom_at_least(40, 3, 5),
+            places=12,
+        )
+
+    def test_prob_open_all_two_cards_inclusion_exclusion(self):
+        # P(>=1 von A UND >=1 von B), A=B=3 Kopien, 40 Karten, 5 Zuege.
+        expected = (
+            math.comb(40, 5) - 2 * math.comb(37, 5) + math.comb(34, 5)
+        ) / math.comb(40, 5)
+        self.assertAlmostEqual(ydb.prob_open_all(40, [3, 3], 5), expected, places=12)
+        # AND ist nie wahrscheinlicher als 'mindestens eine davon'.
+        self.assertLessEqual(
+            ydb.prob_open_all(40, [3, 3], 5),
+            ydb.hypergeom_at_least(40, 6, 5),
+        )
+
+    def test_prob_open_all_edge_cases(self):
+        self.assertEqual(ydb.prob_open_all(40, [], 5), 1.0)    # keine Bedingung
+        self.assertEqual(ydb.prob_open_all(40, [3], 0), 0.0)   # keine Zuege
+        self.assertEqual(ydb.prob_open_all(0, [3], 5), 0.0)    # leeres Deck
 
     def test_parse_ydk_sections(self):
         text = "#created by x\n#main\n100\n100\n#extra\n200\n!side\n300\n"
@@ -266,6 +292,43 @@ class DbTests(unittest.TestCase):
         # Name aufgeloest, nicht der Zahlen-Fallback str(id).
         self.assertFalse(sug[self.main_id2]["name"].isdigit())
         self.assertGreaterEqual(sug[self.main_id2]["direct"], 1)
+
+    # -- Starthand-Simulator ----------------------------------------------
+
+    def test_draw_sample_hand_is_deterministic_and_valid(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=3)
+        ydb.add_card_to_deck(self.db, deck, self.main_id2, zone="main", count=2)
+        pool_ids = {self.main_id, self.main_id2}
+        hand = ydb.draw_sample_hand(self.db, deck, 5, rng=random.Random(0))
+        self.assertEqual(len(hand), 5)                       # 5 aus 5 Kopien
+        self.assertTrue(all(c["card_id"] in pool_ids for c in hand))
+        # Kopiengrenzen nicht ueberschritten (max 3x main_id, 2x main_id2).
+        counts = {}
+        for c in hand:
+            counts[c["card_id"]] = counts.get(c["card_id"], 0) + 1
+        self.assertLessEqual(counts.get(self.main_id, 0), 3)
+        self.assertLessEqual(counts.get(self.main_id2, 0), 2)
+        # Gleicher Seed -> gleiche Hand (Reproduzierbarkeit).
+        again = ydb.draw_sample_hand(self.db, deck, 5, rng=random.Random(0))
+        self.assertEqual([c["card_id"] for c in hand],
+                         [c["card_id"] for c in again])
+
+    def test_draw_sample_hand_caps_to_main_size(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=2)
+        hand = ydb.draw_sample_hand(self.db, deck, 5, rng=random.Random(1))
+        self.assertEqual(len(hand), 2)                       # nur 2 Karten da
+
+    def test_deck_main_cards_copies_and_roles(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=3)
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, self.main_id, 1)
+        ydb.set_combo_card_role(self.db, combo, self.main_id, "starter")
+        cards = {c["card_id"]: c for c in ydb.deck_main_cards(self.db, deck)}
+        self.assertEqual(cards[self.main_id]["copies"], 3)
+        self.assertIn("starter", cards[self.main_id]["roles"])
 
     # -- Reference-Decks binden keinen Bestand ----------------------------
 

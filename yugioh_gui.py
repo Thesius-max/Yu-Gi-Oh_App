@@ -181,6 +181,8 @@ _GROUP_HEADER_FG = QColor("#d4af37")  # = _GOLD
 _ROLE_DE = ydb.ROLE_LABEL
 # Zweiter Daten-Slot an Bausteine-Listeneinträgen: die Rolle (UserRole = card_id).
 _PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
+# Zweiter Daten-Slot im Starthand-Picker: Kopienzahl der Karte (UserRole = card_id).
+_SIM_COPIES_DATA = Qt.ItemDataRole.UserRole + 1
 
 
 def _pct(p: float) -> str:
@@ -1240,6 +1242,47 @@ class DeckView(QWidget):
         sv.addWidget(self.suggestion_list, stretch=1)
         self.helper_tabs.addTab(sug_tab, "Vorschläge")
 
+        sim_tab = QWidget()
+        siv = QVBoxLayout(sim_tab)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Rechenart:"))
+        self.sim_mode_cb = QComboBox()
+        self.sim_mode_cb.addItem("alle zusammen", True)
+        self.sim_mode_cb.addItem("mindestens eine", False)
+        self.sim_mode_cb.currentIndexChanged.connect(self._recompute_prob)
+        mode_row.addWidget(self.sim_mode_cb)
+        mode_row.addStretch()
+        siv.addLayout(mode_row)
+        siv.addWidget(QLabel(
+            "Karten ankreuzen — Wahrscheinlichkeit in der Starthand:"
+        ))
+        self.sim_cards = QListWidget()
+        self.sim_cards.itemChanged.connect(self._recompute_prob)
+        siv.addWidget(self.sim_cards, stretch=1)
+        self.sim_fill_btn = QPushButton("Aus gewählter Kombo füllen")
+        self.sim_fill_btn.clicked.connect(self._fill_from_combo)
+        siv.addWidget(self.sim_fill_btn)
+        self.sim_prob = QLabel("")
+        self.sim_prob.setWordWrap(True)
+        siv.addWidget(self.sim_prob)
+        draw_row = QHBoxLayout()
+        self.sim_draw_btn = QPushButton("Hand ziehen")
+        self.sim_draw_btn.clicked.connect(self._draw_hand)
+        draw_row.addWidget(self.sim_draw_btn)
+        draw_row.addWidget(QLabel("Größe:"))
+        self.sim_hand_cb = QComboBox()
+        self.sim_hand_cb.addItem("5 (First)", 5)
+        self.sim_hand_cb.addItem("6 (Second)", 6)
+        draw_row.addWidget(self.sim_hand_cb)
+        draw_row.addStretch()
+        siv.addLayout(draw_row)
+        self.sim_hand = QListWidget()
+        siv.addWidget(self.sim_hand, stretch=1)
+        self.sim_verdict = QLabel("")
+        self.sim_verdict.setWordWrap(True)
+        siv.addWidget(self.sim_verdict)
+        self.helper_tabs.addTab(sim_tab, "Starthand")
+
         # Kombo-Linien als Datei weitergeben (z.B. an erfahrene Spieler).
         export_combos_btn = QPushButton("Kombo-Linien exportieren…")
         export_combos_btn.clicked.connect(self._export_combos)
@@ -1374,6 +1417,7 @@ class DeckView(QWidget):
             self._refresh_consistency()
             self._refresh_plan()
             self._refresh_combos()
+            self._refresh_simulator()
             return
         # Sammlung<->Deck-Abgleich: fehlende Kopien je Karte (andere Decks
         # binden Bestand). Nur Warnung, blockiert nichts.
@@ -1400,6 +1444,7 @@ class DeckView(QWidget):
         self._refresh_plan()
         self._refresh_combos()
         self._refresh_suggestions()
+        self._refresh_simulator()
 
     def _export_combos(self) -> None:
         """Kombo-Linien des Decks als .txt oder .pdf speichern."""
@@ -1594,6 +1639,112 @@ class DeckView(QWidget):
         if card_id is None or self.open_card_callback is None:
             return
         self.open_card_callback(card_id)
+
+    # -- Starthand-Simulator ------------------------------------------------
+
+    def _checked_sim_copies(self) -> list[int]:
+        """Kopienzahlen der angekreuzten Karten im Starthand-Picker."""
+        out = []
+        for i in range(self.sim_cards.count()):
+            it = self.sim_cards.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                out.append(it.data(_SIM_COPIES_DATA))
+        return out
+
+    def _recompute_prob(self, *_a) -> None:
+        """Live-Wahrscheinlichkeit für die angekreuzten Karten (5er/6er)."""
+        if self.deck_id is None or not self.repo.exists():
+            self.sim_prob.setText("")
+            return
+        copies = self._checked_sim_copies()
+        if not copies:
+            self.sim_prob.setText("Karten ankreuzen für die Wahrscheinlichkeit.")
+            return
+        size = ydb.deck_counts(self.repo.db_path, self.deck_id)["main"]
+        if self.sim_mode_cb.currentData():           # AND
+            p5 = ydb.prob_open_all(size, copies, 5)
+            p6 = ydb.prob_open_all(size, copies, 6)
+            label = "alle zusammen"
+        else:                                        # OR
+            total = sum(copies)
+            p5 = ydb.hypergeom_at_least(size, total, 5)
+            p6 = ydb.hypergeom_at_least(size, total, 6)
+            label = "mindestens eine"
+        noun = "Karte" if len(copies) == 1 else "Karten"
+        self.sim_prob.setText(
+            f"P({len(copies)} {noun}, {label}):  "
+            f"5er {_pct(p5)}  ·  6er {_pct(p6)}"
+        )
+
+    def _fill_from_combo(self) -> None:
+        """Bausteine der im Reiter 'Kombos' gewählten Kombo im Picker ankreuzen
+        (nur die, die auch im Main Deck liegen)."""
+        item = self.combo_list.currentItem()
+        if item is None:
+            self.sim_prob.setText("Erst im Reiter 'Kombos' eine Kombo wählen.")
+            return
+        combo_id = item.data(Qt.ItemDataRole.UserRole)
+        piece_ids = {
+            p["card_id"] for p in ydb.combo_cards(self.repo.db_path, combo_id)
+        }
+        self.sim_cards.blockSignals(True)
+        for i in range(self.sim_cards.count()):
+            it = self.sim_cards.item(i)
+            in_combo = it.data(Qt.ItemDataRole.UserRole) in piece_ids
+            it.setCheckState(
+                Qt.CheckState.Checked if in_combo else Qt.CheckState.Unchecked
+            )
+        self.sim_cards.blockSignals(False)
+        self._recompute_prob()
+
+    def _draw_hand(self) -> None:
+        """Eine zufällige Beispielhand aus dem Main Deck ziehen + Verdikt."""
+        if self.deck_id is None or not self.repo.exists():
+            return
+        drawn = ydb.draw_sample_hand(
+            self.repo.db_path, self.deck_id, self.sim_hand_cb.currentData()
+        )
+        self.sim_hand.clear()
+        has_starter = False
+        for c in drawn:
+            tag = ""
+            if c["roles"]:
+                tag = "  [" + ", ".join(_ROLE_DE[r] for r in c["roles"]) + "]"
+                if "starter" in c["roles"]:
+                    has_starter = True
+            self.sim_hand.addItem(f"{c['name']}{tag}")
+        if not drawn:
+            self.sim_verdict.setText("Main Deck ist leer.")
+        elif has_starter:
+            self.sim_verdict.setText("✓ Hand enthält einen Starter.")
+        else:
+            self.sim_verdict.setText("✗ Brick: kein Starter in dieser Hand.")
+
+    def _refresh_simulator(self) -> None:
+        """Picker aus dem Main Deck neu befüllen; Auswahl/Hand zurücksetzen."""
+        self.sim_cards.blockSignals(True)
+        self.sim_cards.clear()
+        self.sim_hand.clear()
+        self.sim_verdict.setText("")
+        if self.deck_id is None or not self.repo.exists():
+            self.sim_cards.blockSignals(False)
+            self.sim_prob.setText("")
+            self.sim_draw_btn.setEnabled(False)
+            return
+        cards = ydb.deck_main_cards(self.repo.db_path, self.deck_id)
+        for c in cards:
+            label = f"{c['name']}  ({c['copies']}x)"
+            if c["roles"]:
+                label += "  [" + ", ".join(_ROLE_DE[r] for r in c["roles"]) + "]"
+            it = QListWidgetItem(label)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            it.setData(Qt.ItemDataRole.UserRole, c["card_id"])
+            it.setData(_SIM_COPIES_DATA, c["copies"])
+            self.sim_cards.addItem(it)
+        self.sim_cards.blockSignals(False)
+        self.sim_draw_btn.setEnabled(bool(cards))
+        self._recompute_prob()
 
     def _refresh_combos(self) -> None:
         self.combo_list.clear()
@@ -3164,6 +3315,19 @@ QListWidget::item, QTableWidget::item { padding: 3px 4px; }
 QListWidget::item:hover, QTableWidget::item:hover { background: #2c2140; }
 QListWidget::item:selected, QTableWidget::item:selected {
     background: #d4af37; color: #1a1426;
+}
+
+/* Checkbox-Indikatoren (ankreuzbare Listen + QCheckBox) -- ohne dies zeichnet
+   Fusion sie dunkel auf dunkel. Angekreuzt = gold gefuellt (Theme-Akzent). */
+QCheckBox::indicator, QListWidget::indicator {
+    width: 14px; height: 14px;
+    border: 1px solid #4a3d5e; border-radius: 3px; background: #1f1830;
+}
+QCheckBox::indicator:hover, QListWidget::indicator:hover {
+    border-color: #d4af37;
+}
+QCheckBox::indicator:checked, QListWidget::indicator:checked {
+    background: #d4af37; border-color: #d4af37;
 }
 
 /* Tabellen-Kopf */
