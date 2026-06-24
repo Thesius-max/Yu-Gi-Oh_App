@@ -21,6 +21,7 @@ anzeigen will, laedt sie einmal herunter und legt sie lokal ab
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import itertools
 import json
@@ -152,8 +153,7 @@ def migration_backup(db_path: str = DEFAULT_DB) -> Optional[str]:
     oder None, wenn keine noetig war."""
     if not os.path.exists(db_path):
         return None
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         try:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key='app_version';"
@@ -186,8 +186,6 @@ def migration_backup(db_path: str = DEFAULT_DB) -> Optional[str]:
             (APP_VERSION,),
         )
         conn.commit()
-    finally:
-        conn.close()
     if backup is None:
         return None
     # Nur die frische Sicherung behalten -- die DB ist zu gross, um je
@@ -343,6 +341,20 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+@contextlib.contextmanager
+def _conn(db_path: str):
+    """Verbindung als Kontextmanager: schliesst zuverlaessig, auch bei
+    Fehlern. Ersetzt das wiederkehrende try/finally-Geruest -- das explizite
+    conn.commit() bleibt in den schreibenden Funktionen stehen (klare
+    Trennung lesend/schreibend, unveraenderte Semantik: ohne commit gehen
+    Aenderungen beim Schliessen verloren)."""
+    conn = _connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Ruestet Spalten nach, die juenger sind als die Tabelle selbst
     (CREATE TABLE IF NOT EXISTS ergaenzt keine Spalten). Idempotent."""
@@ -365,14 +377,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def ensure_schema(db_path: str = DEFAULT_DB) -> None:
     """Legt fehlende Tabellen an (idempotent). Auch fuer bestehende DBs,
     damit nachgeruestete Tabellen wie decks/deck_cards vorhanden sind."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.executescript(SCHEMA)
         conn.commit()
         _migrate(conn)
         conn.commit()
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +410,7 @@ def build_database(
         de_by_id: dict[int, dict] = {}
     cards = list(cards)
 
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
         # Karten per UPSERT aktualisieren statt zu loeschen -- sonst wuerden
@@ -492,22 +500,18 @@ def build_database(
             )
         conn.commit()
         return len(cards)
-    finally:
-        conn.close()
 
 
 def local_db_version(db_path: str = DEFAULT_DB) -> Optional[str]:
     """Lokal gespeicherte Datenbankversion (None, wenn unbekannt)."""
-    conn = _connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT value FROM meta WHERE key='db_version';"
-        ).fetchone()
-        return row["value"] if row else None
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
+    with _conn(db_path) as conn:
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='db_version';"
+            ).fetchone()
+            return row["value"] if row else None
+        except sqlite3.OperationalError:
+            return None
 
 
 def needs_update(db_path: str = DEFAULT_DB) -> bool:
@@ -524,8 +528,7 @@ def needs_update(db_path: str = DEFAULT_DB) -> bool:
 
 def search_text(db_path: str, query: str, limit: int = 50) -> list[sqlite3.Row]:
     """Volltextsuche in Name und Kartentext."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT c.* FROM cards_fts
                JOIN cards c ON c.id = cards_fts.rowid
@@ -534,8 +537,6 @@ def search_text(db_path: str, query: str, limit: int = 50) -> list[sqlite3.Row]:
                LIMIT ?""",
             (query, limit),
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def filter_cards(
@@ -566,13 +567,10 @@ def filter_cards(
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(limit)
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             f"SELECT * FROM cards {where} ORDER BY name LIMIT ?", params
         ).fetchall()
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -590,8 +588,7 @@ def add_to_collection(
     language: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> int:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         # Identischen Druck zusammenfuehren (IS vergleicht NULL-sicher),
         # statt einen zweiten Eintrag anzulegen.
         existing = conn.execute(
@@ -616,8 +613,6 @@ def add_to_collection(
             entry_id = cur.lastrowid
         conn.commit()
         return entry_id
-    finally:
-        conn.close()
 
 
 def list_collection(
@@ -650,11 +645,8 @@ def list_collection(
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY COALESCE(c.name_de, c.name), col.entry_id"
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(sql, args).fetchall()
-    finally:
-        conn.close()
     # Kartenklasse in Python filtern -- exakt dieselbe Logik wie die
     # Gruppierung (card_category), keine zweite LIKE-Naeherung in SQL.
     if category:
@@ -666,16 +658,13 @@ def collection_distinct(db_path: str, column: str) -> list[str]:
     """Vorhandene Werte einer Kartenspalte im eigenen Bestand (fuer Filter)."""
     if column not in ("attribute", "archetype", "race", "type"):
         raise ValueError(f"Unerwartete Spalte: {column}")
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             f"""SELECT DISTINCT c.{column} AS v
                 FROM collection col JOIN cards c ON c.id = col.card_id
                 WHERE c.{column} IS NOT NULL ORDER BY v"""
         ).fetchall()
         return [r["v"] for r in rows]
-    finally:
-        conn.close()
 
 
 def set_card_translation(
@@ -690,8 +679,7 @@ def set_card_translation(
     den FTS-Index aktuell, damit die Suche den Namen sofort findet."""
     name_de = (name_de or "").strip() or None
     desc_de = (desc_de or "").strip() or None
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         old = conn.execute(
             "SELECT name, description, name_de, desc_de FROM cards WHERE id = ?",
             (card_id,),
@@ -730,14 +718,11 @@ def set_card_translation(
             (card_id,),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def set_collection_quantity(db_path: str, entry_id: int, quantity: int) -> None:
     """Setzt die Menge eines Eintrags. quantity <= 0 entfernt den Eintrag."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         if quantity <= 0:
             conn.execute("DELETE FROM collection WHERE entry_id = ?", (entry_id,))
         else:
@@ -746,24 +731,18 @@ def set_collection_quantity(db_path: str, entry_id: int, quantity: int) -> None:
                 (quantity, entry_id),
             )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def remove_collection_entry(db_path: str, entry_id: int) -> None:
     """Entfernt einen Bestandseintrag vollstaendig."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute("DELETE FROM collection WHERE entry_id = ?", (entry_id,))
         conn.commit()
-    finally:
-        conn.close()
 
 
 def collection_stats(db_path: str) -> tuple[int, int, int]:
     """(Anzahl Eintraege, verschiedene Karten, Karten gesamt)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         row = conn.execute(
             """SELECT COUNT(*) AS entries,
                       COUNT(DISTINCT card_id) AS unique_cards,
@@ -771,14 +750,11 @@ def collection_stats(db_path: str) -> tuple[int, int, int]:
                FROM collection"""
         ).fetchone()
         return row["entries"], row["unique_cards"], row["total"]
-    finally:
-        conn.close()
 
 
 def collection_overview(db_path: str) -> list[sqlite3.Row]:
     """Bestand mit Kartennamen und Gesamtmenge je Karte."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT c.id, c.name, c.type, SUM(col.quantity) AS total
                FROM collection col
@@ -786,8 +762,6 @@ def collection_overview(db_path: str) -> list[sqlite3.Row]:
                GROUP BY c.id
                ORDER BY c.name"""
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def cache_image(card_id: int, image_url: str, image_dir: str = IMAGE_DIR) -> Path:
@@ -847,8 +821,7 @@ def create_deck(
 ) -> int:
     """kind='reference' legt ein Referenz-Deck (Korpus) an; Standard ist
     ein eigenes Deck (kind NULL)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO decks (name, kind, source, format_date) "
             "VALUES (?,?,?,?)",
@@ -856,27 +829,21 @@ def create_deck(
         )
         conn.commit()
         return cur.lastrowid
-    finally:
-        conn.close()
 
 
 def list_decks(db_path: str) -> list[sqlite3.Row]:
     """Nur eigene Decks -- Referenz-Decks (Korpus) bleiben bewusst draussen,
     damit Deck-Auswahl, Heimat-Deck und Filter sie nie anbieten."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             "SELECT deck_id, name FROM decks WHERE kind IS NULL ORDER BY name"
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def list_reference_decks(db_path: str) -> list[sqlite3.Row]:
     """Der Korpus: importierte Meta-Listen mit Quelle, Stand und Kartenzahl,
     neueste zuerst (Listen ohne Datum zuletzt)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT d.deck_id, d.name, d.source, d.format_date,
                       COALESCE((SELECT SUM(dc.quantity) FROM deck_cards dc
@@ -884,22 +851,16 @@ def list_reference_decks(db_path: str) -> list[sqlite3.Row]:
                FROM decks d WHERE d.kind = 'reference'
                ORDER BY d.format_date IS NULL, d.format_date DESC, d.name"""
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def delete_deck(db_path: str, deck_id: int) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute("DELETE FROM decks WHERE deck_id = ?", (deck_id,))
         conn.commit()
-    finally:
-        conn.close()
 
 
 def deck_cards(db_path: str, deck_id: int, zone: str) -> list[sqlite3.Row]:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT dc.card_id, c.name, c.type, c.frame_type, dc.quantity
                FROM deck_cards dc
@@ -908,8 +869,6 @@ def deck_cards(db_path: str, deck_id: int, zone: str) -> list[sqlite3.Row]:
                ORDER BY c.name""",
             (deck_id, zone),
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def _total_copies(conn: sqlite3.Connection, deck_id: int, card_id: int) -> int:
@@ -928,8 +887,7 @@ def add_card_to_deck(
     """Fuegt Kopien hinzu. zone=None -> automatische Zuordnung (main/extra).
     Beachtet die 3-Kopien-Regel und die Zonen-Logik.
     Rueckgabe: (tatsaechlich hinzugefuegt, Hinweistext)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         card = conn.execute(
             "SELECT type, frame_type FROM cards WHERE id = ?", (card_id,)
         ).fetchone()
@@ -969,8 +927,6 @@ def add_card_to_deck(
         conn.commit()
         msg = "" if add == count else f"Nur {add} hinzugefügt ({MAX_COPIES}-Kopien-Grenze)."
         return (add, msg)
-    finally:
-        conn.close()
 
 
 def change_deck_quantity(
@@ -978,8 +934,7 @@ def change_deck_quantity(
 ) -> None:
     """Erhoeht/senkt die Menge in einer Zone. Auf 0 -> Eintrag entfernt.
     Erhoehung beachtet die 3-Kopien-Regel ueber alle Zonen."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         if delta > 0:
             allowed = MAX_COPIES - _total_copies(conn, deck_id, card_id)
             if allowed <= 0:
@@ -1006,21 +961,16 @@ def change_deck_quantity(
                 (new, deck_id, card_id, zone),
             )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def remove_deck_card(db_path: str, deck_id: int, card_id: int, zone: str) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "DELETE FROM deck_cards "
             "WHERE deck_id = ? AND card_id = ? AND zone = ?",
             (deck_id, card_id, zone),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def move_deck_card(
@@ -1029,8 +979,7 @@ def move_deck_card(
 ) -> tuple[int, str]:
     """Verschiebt Kopien zwischen Zonen (z.B. Main<->Side). Prueft die Zonen-Logik.
     Die Gesamtzahl bleibt gleich, die 3-Kopien-Regel ist daher nicht betroffen."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         card = conn.execute(
             "SELECT type, frame_type FROM cards WHERE id = ?", (card_id,)
         ).fetchone()
@@ -1078,8 +1027,6 @@ def move_deck_card(
             )
         conn.commit()
         return (move, "")
-    finally:
-        conn.close()
 
 
 def deck_availability(db_path: str, deck_id: int) -> list[dict]:
@@ -1092,8 +1039,7 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
       missing   -- fuer dieses Deck fehlende Kopien
     Nur Hinweis-Charakter: das Deckbuilding wird nicht blockiert (geplante
     Kaeufe / Proxies bleiben moeglich)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT dc.card_id, c.name, c.name_de,
                       SUM(dc.quantity) AS in_deck,
@@ -1110,8 +1056,6 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
                ORDER BY COALESCE(c.name_de, c.name)""",
             (deck_id,),
         ).fetchall()
-    finally:
-        conn.close()
     out = []
     for r in rows:
         available = max(0, r["owned"] - r["elsewhere"])
@@ -1129,8 +1073,7 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
 def card_bound_in_decks(db_path: str, card_id: int) -> int:
     """Wie viele Kopien einer Karte ueber alle EIGENEN Decks zusammen
     verplant sind (Referenz-Decks binden keinen physischen Bestand)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(dc.quantity), 0) AS n FROM deck_cards dc "
             "JOIN decks d ON d.deck_id = dc.deck_id "
@@ -1138,14 +1081,11 @@ def card_bound_in_decks(db_path: str, card_id: int) -> int:
             (card_id,),
         ).fetchone()
         return int(row["n"])
-    finally:
-        conn.close()
 
 
 def deck_counts(db_path: str, deck_id: int) -> dict:
     """Kartenzahl je Zone als {'main': n, 'extra': n, 'side': n}."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             "SELECT zone, COALESCE(SUM(quantity), 0) AS n FROM deck_cards "
             "WHERE deck_id = ? GROUP BY zone",
@@ -1155,8 +1095,6 @@ def deck_counts(db_path: str, deck_id: int) -> dict:
         for r in rows:
             counts[r["zone"]] = int(r["n"])
         return counts
-    finally:
-        conn.close()
 
 
 def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
@@ -1168,8 +1106,7 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
         (e <= EXTRA_MAX, f"Extra {e} (max. {EXTRA_MAX})"),
         (s <= SIDE_MAX, f"Side {s} (max. {SIDE_MAX})"),
     ]
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         over = conn.execute(
             """SELECT c.name, SUM(dc.quantity) AS n
                FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
@@ -1177,8 +1114,6 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
                GROUP BY dc.card_id HAVING n > ?""",
             (deck_id, MAX_COPIES),
         ).fetchall()
-    finally:
-        conn.close()
     for r in over:
         checks.append((False, f"{r['name']}: {r['n']} Kopien"))
     return checks
@@ -1193,8 +1128,7 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
 
 def export_deck_ydk(db_path: str, deck_id: int) -> str:
     """Serialisiert ein Deck als .ydk-Text (je Kopie eine Zeile)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         deck = conn.execute(
             "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
         ).fetchone()
@@ -1213,8 +1147,6 @@ def export_deck_ydk(db_path: str, deck_id: int) -> str:
             for r in rows:
                 lines.extend([str(r["card_id"])] * r["quantity"])
         return "\n".join(lines) + "\n"
-    finally:
-        conn.close()
 
 
 def parse_ydk(text: str) -> dict[str, list[int]]:
@@ -1259,8 +1191,7 @@ def import_deck_ydk(
         "imported": {"main": 0, "extra": 0, "side": 0},
         "unknown": [], "capped": [], "moved": [],
     }
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         # Kopien je (zone, card_id) zaehlen; Zone ggf. korrigieren.
         counts: dict[tuple[str, int], int] = {}
         cards: dict[int, sqlite3.Row] = {}
@@ -1316,8 +1247,6 @@ def import_deck_ydk(
             report["imported"][zone] += n
         conn.commit()
         return (deck_id, report)
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1388,16 +1317,13 @@ def create_combo(
     db_path: str, name: str, archetype: Optional[str] = None,
     deck_id: Optional[int] = None,
 ) -> int:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO combos (name, archetype, deck_id) VALUES (?,?,?)",
             (name, archetype, deck_id),
         )
         conn.commit()
         return cur.lastrowid
-    finally:
-        conn.close()
 
 
 def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row]:
@@ -1413,16 +1339,12 @@ def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row
         sql += " WHERE cb.deck_id = ?"
         args = (deck_id,)
     sql += " ORDER BY cb.name"
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(sql, args).fetchall()
-    finally:
-        conn.close()
 
 
 def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT cb.combo_id, cb.name, cb.archetype, cb.notes,
                       cb.boss_card_id, b.name AS boss_name,
@@ -1433,64 +1355,49 @@ def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
                WHERE cb.combo_id = ?""",
             (combo_id,),
         ).fetchone()
-    finally:
-        conn.close()
 
 
 def set_combo_deck(db_path: str, combo_id: int, deck_id: Optional[int]) -> None:
     """Setzt das Heimat-Deck einer Kombo; None entfernt die Verknuepfung."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "UPDATE combos SET deck_id = ? WHERE combo_id = ?",
             (deck_id, combo_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def update_combo(
     db_path: str, combo_id: int, name: str, archetype: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "UPDATE combos SET name = ?, archetype = ?, notes = ?"
             " WHERE combo_id = ?",
             (name, archetype, notes, combo_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def set_combo_boss(db_path: str, combo_id: int, card_id: Optional[int]) -> None:
     """Setzt das Zielmonster (Boss) einer Kombo; None entfernt es."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "UPDATE combos SET boss_card_id = ? WHERE combo_id = ?",
             (card_id, combo_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def delete_combo(db_path: str, combo_id: int) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute("DELETE FROM combos WHERE combo_id = ?", (combo_id,))
         conn.commit()
-    finally:
-        conn.close()
 
 
 def add_combo_card(db_path: str, combo_id: int, card_id: int, quantity: int = 1) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         ex = conn.execute(
             "SELECT quantity FROM combo_cards WHERE combo_id = ? AND card_id = ?",
             (combo_id, card_id),
@@ -1507,15 +1414,12 @@ def add_combo_card(db_path: str, combo_id: int, card_id: int, quantity: int = 1)
                 (combo_id, card_id, min(MAX_COMBO_PIECE, quantity)),
             )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def set_combo_card_quantity(
     db_path: str, combo_id: int, card_id: int, quantity: int
 ) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         if quantity <= 0:
             conn.execute(
                 "DELETE FROM combo_cards WHERE combo_id = ? AND card_id = ?",
@@ -1527,8 +1431,6 @@ def set_combo_card_quantity(
                 (min(MAX_COMBO_PIECE, quantity), combo_id, card_id),
             )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def set_combo_card_role(
@@ -1537,32 +1439,25 @@ def set_combo_card_role(
     """Setzt die Rolle eines Bausteins (siehe COMBO_ROLES); None loescht sie."""
     if role is not None and role not in COMBO_ROLES:
         raise ValueError(f"Unbekannte Rolle: {role}")
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "UPDATE combo_cards SET role = ? WHERE combo_id = ? AND card_id = ?",
             (role, combo_id, card_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def remove_combo_card(db_path: str, combo_id: int, card_id: int) -> None:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute(
             "DELETE FROM combo_cards WHERE combo_id = ? AND card_id = ?",
             (combo_id, card_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def combo_cards(db_path: str, combo_id: int) -> list[sqlite3.Row]:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT cc.card_id, c.name, c.type, c.frame_type,
                       cc.quantity, cc.role
@@ -1570,14 +1465,11 @@ def combo_cards(db_path: str, combo_id: int) -> list[sqlite3.Row]:
                WHERE cc.combo_id = ? ORDER BY c.name""",
             (combo_id,),
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def set_combo_steps(db_path: str, combo_id: int, steps: list[str]) -> None:
     """Ersetzt alle Schritte einer Kombo durch die uebergebene Liste."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         conn.execute("DELETE FROM combo_steps WHERE combo_id = ?", (combo_id,))
         for i, text in enumerate(steps, start=1):
             conn.execute(
@@ -1585,41 +1477,32 @@ def set_combo_steps(db_path: str, combo_id: int, steps: list[str]) -> None:
                 (combo_id, i, text),
             )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def combo_steps(db_path: str, combo_id: int) -> list[sqlite3.Row]:
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             "SELECT step_no, text FROM combo_steps WHERE combo_id = ? ORDER BY step_no",
             (combo_id,),
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def combos_for_card(db_path: str, card_id: int) -> list[sqlite3.Row]:
     """Alle Kombos, die diese Karte als Baustein verwenden."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         return conn.execute(
             """SELECT cb.combo_id, cb.name FROM combos cb
                JOIN combo_cards cc ON cc.combo_id = cb.combo_id
                WHERE cc.card_id = ? ORDER BY cb.name""",
             (card_id,),
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
     """Abgleich einer Kombo mit einem Deck (Main+Extra).
     Rueckgabe: {'total', 'covered', 'pieces': [{card_id, name, type,
     frame_type, needed, have, missing}]}."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         pieces = conn.execute(
             """SELECT cc.card_id, c.name, c.type, c.frame_type,
                       cc.quantity AS needed,
@@ -1630,8 +1513,6 @@ def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
                WHERE cc.combo_id = ? ORDER BY c.name""",
             (deck_id, combo_id),
         ).fetchall()
-    finally:
-        conn.close()
     result, covered = [], 0
     for p in pieces:
         missing = max(0, p["needed"] - p["have"])
@@ -1667,8 +1548,7 @@ def deck_role_summary(db_path: str, deck_id: int) -> dict[str, list[dict]]:
     mehrere Kombos ihr dieselbe Rolle geben; verschiedene Rollen aus
     verschiedenen Kombos sind moeglich.
     Rueckgabe: {rolle: [{'card_id', 'name', 'copies'}, ...]}."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT DISTINCT cc.role, dc.card_id,
                       COALESCE(c.name_de, c.name) AS name, dc.quantity
@@ -1680,8 +1560,6 @@ def deck_role_summary(db_path: str, deck_id: int) -> dict[str, list[dict]]:
                ORDER BY name""",
             (deck_id,),
         ).fetchall()
-    finally:
-        conn.close()
     out: dict[str, list[dict]] = {}
     for r in rows:
         out.setdefault(r["role"], []).append({
@@ -1697,15 +1575,12 @@ def deck_boss_lines(db_path: str, deck_id: int) -> list[dict]:
     zwischen den Gruppen (beste Linie zuerst). Kombos ohne Boss bilden die
     letzte Gruppe (boss_card_id None).
     Rueckgabe: [{'boss_card_id', 'boss_name', 'lines': [wie combos_for_deck]}]."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT cb.combo_id, cb.boss_card_id,
                       COALESCE(b.name_de, b.name) AS boss_name
                FROM combos cb LEFT JOIN cards b ON b.id = cb.boss_card_id"""
         ).fetchall()
-    finally:
-        conn.close()
     boss_of = {r["combo_id"]: (r["boss_card_id"], r["boss_name"]) for r in rows}
     groups: dict = {}
     for line in combos_for_deck(db_path, deck_id):
@@ -1725,8 +1600,7 @@ def combo_coverage_collection(db_path: str, combo_id: int) -> dict:
     """Abgleich einer Kombo mit der eigenen Sammlung (collection).
     Gleiche Struktur wie combo_coverage, aber 'have' zaehlt den Bestand --
     beantwortet: 'Welche Bausteine besitze ich schon?'"""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         pieces = conn.execute(
             """SELECT cc.card_id, c.name, c.type, c.frame_type,
                       cc.quantity AS needed,
@@ -1736,8 +1610,6 @@ def combo_coverage_collection(db_path: str, combo_id: int) -> dict:
                WHERE cc.combo_id = ? ORDER BY c.name""",
             (combo_id,),
         ).fetchall()
-    finally:
-        conn.close()
     result, covered = [], 0
     for p in pieces:
         missing = max(0, p["needed"] - p["have"])
@@ -1798,8 +1670,7 @@ def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
     Eine Karte zaehlt je Rolle einmal, auch wenn mehrere Kombos ihr dieselbe
     Rolle geben; traegt sie in verschiedenen Kombos verschiedene Rollen,
     zaehlt sie in jeder davon."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT role, SUM(quantity) AS n FROM (
                    SELECT DISTINCT dc.card_id, cc.role, dc.quantity
@@ -1811,8 +1682,6 @@ def deck_role_copies(db_path: str, deck_id: int) -> dict[str, int]:
             (deck_id,),
         ).fetchall()
         return {r["role"]: int(r["n"]) for r in rows}
-    finally:
-        conn.close()
 
 
 # Anzeigenamen der Baustein-Rollen (siehe COMBO_ROLES). Oeffentlich, weil die
@@ -1829,13 +1698,10 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
     Enthaelt Notation-Legende, Konsistenz, Rollen-Uebersicht und alle
     Kombos, die mindestens einen Baustein im Deck haben oder dieses Deck
     als Heimat-Deck fuehren (Reihenfolge wie im Deck-Tab: nach Abdeckung)."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         deck = conn.execute(
             "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
         ).fetchone()
-    finally:
-        conn.close()
     if deck is None:
         raise ValueError(f"Deck {deck_id} existiert nicht.")
 
@@ -1974,11 +1840,8 @@ def synergy_edges(db_path: str) -> dict[tuple[int, int], dict]:
     gemeinsamer Kombos. Der Meta-Korpus (Roadmap-Schritt 5) speist spaeter
     zusaetzliche Kanten in denselben Graphen ein.
     Rueckgabe: {(a, b): {'weight': n, 'combos': [combo_id, ...]}} mit a < b."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute("SELECT combo_id, card_id FROM combo_cards").fetchall()
-    finally:
-        conn.close()
     members: dict[int, set[int]] = {}
     for r in rows:
         members.setdefault(r["combo_id"], set()).add(r["card_id"])
@@ -2002,15 +1865,12 @@ def corpus_edges(db_path: str) -> dict[tuple[int, int], dict]:
     uebrig. Paare in weniger als _CORPUS_MIN_DECKS Listen entfallen.
     Rueckgabe: {(a, b): {'weight': ppmi, 'decks': k, 'total': N}} mit a < b;
     'decks'/'total' sind ungewichtete Listen-Zaehler fuer die Begruendung."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT d.deck_id, d.format_date, dc.card_id
                FROM decks d JOIN deck_cards dc ON dc.deck_id = d.deck_id
                WHERE d.kind = 'reference' AND dc.zone IN ('main', 'extra')"""
         ).fetchall()
-    finally:
-        conn.close()
 
     members: dict[int, set[int]] = {}
     dates: dict[int, Optional[str]] = {}
@@ -2075,8 +1935,7 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     'name', 'score', 'direct', 'bridges', 'roles', 'reasons',
     'corpus': [{'name', 'decks', 'weight'}, ...], 'corpus_total'}, ...]},
     Score-sortiert, auf 'limit' gekappt."""
-    conn = _connect(db_path)
-    try:
+    with _conn(db_path) as conn:
         deck_rows = conn.execute(
             "SELECT card_id, zone FROM deck_cards WHERE deck_id = ?",
             (deck_id,),
@@ -2097,8 +1956,6 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
                     tuple(card_ids),
                 )
             }
-    finally:
-        conn.close()
 
     in_deck_any = {r["card_id"] for r in deck_rows}
     deck_set = {r["card_id"] for r in deck_rows if r["zone"] in ("main", "extra")}
@@ -2153,8 +2010,7 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     # Namen fuer Karten nachladen, die nur im Korpus vorkommen.
     missing = set(corpus_adj) - set(names)
     if missing:
-        conn = _connect(db_path)
-        try:
+        with _conn(db_path) as conn:
             ph = ",".join("?" * len(missing))
             names.update({
                 r["id"]: r["name"]
@@ -2164,8 +2020,6 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
                     tuple(missing),
                 )
             })
-        finally:
-            conn.close()
 
     suggestions = []
     for c in candidates:

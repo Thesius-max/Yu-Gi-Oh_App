@@ -74,6 +74,19 @@ neuere Datenbankversion bereitstellt. Beides geht alternativ direkt in der
 App über das Menü **„Daten"** – auch die Erstanlage, falls noch keine
 Datenbank existiert.
 
+## Tests
+
+```bash
+python -m unittest test_yugioh_db
+```
+
+Die Tests prüfen die Datenschicht (3-Kopien-Regel, Zonen-Zuordnung,
+Sammlung-Zusammenführung, Übersetzungen, YDK-Im-/Export, Kombo-Abdeckung,
+Konsistenz-Mathematik) – reine Standardbibliothek, kein zusätzliches Paket.
+Schreibende Tests laufen gegen eine Temp-Kopie der lokalen `yugioh.sqlite3`
+(die Datei selbst bleibt unangetastet); fehlt sie, werden diese Tests
+übersprungen, die Tests reiner Funktionen laufen weiterhin.
+
 ## Bedienung in Kürze
 
 - In **Suche** eine Karte finden und auswählen. In der Detailansicht lässt sie
@@ -143,6 +156,7 @@ Start einer neuen Version automatisch eine Sicherung der Datenbank an
 yugioh_db.py         Datenschicht: API-Abruf, SQLite-Schema, Suche, Sammlung,
                      Decks und Kombos (nur Standardbibliothek)
 yugioh_gui.py        PySide6-Oberfläche mit den vier Tabs
+test_yugioh_db.py    unittest-Suite für die Datenschicht
 build_app.py         Erzeugt das verteilbare PyInstaller-Bundle
 TESTER_LIESMICH.txt  Anleitung, die mit ins Tester-Bundle gelegt wird
 requirements.txt     Abhängigkeiten
