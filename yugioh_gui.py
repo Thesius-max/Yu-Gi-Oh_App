@@ -51,6 +51,52 @@ import yugioh_db as ydb
 # Bei Bedarf gegen die in der API gelieferte card_images-URL austauschbar.
 IMAGE_URL = "https://images.ygoprodeck.com/images/cards/{}.jpg"
 
+
+# ---------------------------------------------------------------------------
+# Datei-Export (von Sammlungs- und Deck-Tab gemeinsam genutzt)
+# ---------------------------------------------------------------------------
+
+def _write_text_file(path: str, text: str) -> None:
+    """Text woertlich als UTF-8 mit Unix-Zeilenenden schreiben (.txt/.md)."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
+def _write_text_pdf(path: str, text: str) -> None:
+    """Text unveraendert als PDF setzen (Monospace, A4). QPdfWriter gehoert
+    zu PySide6 -- keine zusaetzliche Abhaengigkeit."""
+    writer = QPdfWriter(path)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(15, 12, 15, 12), QPageLayout.Unit.Millimeter)
+    doc = QTextDocument()
+    font = QFont("Consolas")
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPointSize(9)
+    doc.setDefaultFont(font)
+    doc.setPlainText(text)
+    doc.print_(writer)
+
+
+def _resolve_export_path(
+    path: str, selected: str, filter_to_ext: dict[str, str], default_ext: str,
+) -> tuple[str, str]:
+    """Bestimmt die Ziel-Endung aus dem Pfad oder -- falls keine angegeben --
+    aus dem gewaehlten Dateifilter und ergaenzt sie. Rueckgabe (pfad, endung).
+    'filter_to_ext' bildet ein Erkennungswort des Filterlabels auf die Endung
+    ab (z.B. {'PDF': '.pdf', 'Markdown': '.md'})."""
+    lower = path.lower()
+    for ext in set(filter_to_ext.values()):
+        if lower.endswith(ext):
+            return path, ext
+    ext = default_ext
+    for key, e in filter_to_ext.items():
+        if key in selected:
+            ext = e
+            break
+    if "." not in os.path.basename(path):
+        path += ext
+    return path, ext
+
 # ---------------------------------------------------------------------------
 # Asynchroner Bild-Loader
 # ---------------------------------------------------------------------------
@@ -658,10 +704,13 @@ class CollectionView(QWidget):
         self.summary = QLabel("")
         refresh_btn = QPushButton("Aktualisieren")
         refresh_btn.clicked.connect(self.refresh)
+        export_btn = QPushButton("Exportieren…")
+        export_btn.clicked.connect(self._export)
         self.remove_btn = QPushButton("Ausgewählten Eintrag entfernen")
         self.remove_btn.clicked.connect(self._remove_selected)
         toolbar.addWidget(self.summary)
         toolbar.addStretch()
+        toolbar.addWidget(export_btn)
         toolbar.addWidget(refresh_btn)
         toolbar.addWidget(self.remove_btn)
 
@@ -817,6 +866,48 @@ class CollectionView(QWidget):
             or self.filter_attr.currentData()
             or self.filter_arch.currentData()
         )
+
+    def _export(self) -> None:
+        """Sammlung exportieren -- lesbar (.txt/.pdf) oder als KI-tauglicher
+        Markdown-Block (.md). Beruecksichtigt die aktiven Filter; ohne Filter
+        ist es die gesamte Sammlung."""
+        if not self.repo.exists():
+            QMessageBox.warning(
+                self, "Export nicht möglich", "Keine Datenbank vorhanden."
+            )
+            return
+        suggested = "sammlung-gefiltert" if self._filters_active() else "sammlung"
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Sammlung exportieren", suggested + ".txt",
+            "Textdatei (*.txt);;PDF-Datei (*.pdf);;Markdown für KI (*.md)",
+        )
+        if not path:
+            return
+        path, ext = _resolve_export_path(
+            path, selected,
+            {"Text": ".txt", "PDF": ".pdf", "Markdown": ".md"}, default_ext=".txt",
+        )
+        kwargs = dict(
+            text=self.filter_text.text(),
+            category=self.filter_cat.currentData(),
+            attribute=self.filter_attr.currentData(),
+            archetype=self.filter_arch.currentData(),
+        )
+        try:
+            if ext == ".md":
+                _write_text_file(
+                    path, ydb.export_collection_markdown(self.repo.db_path, **kwargs)
+                )
+            else:
+                text = ydb.export_collection_text(self.repo.db_path, **kwargs)
+                if ext == ".pdf":
+                    _write_text_pdf(path, text)
+                else:
+                    _write_text_file(path, text)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
+            return
+        self.summary.setText(f"Sammlung exportiert nach {path}")
 
     def _update_summary(self, filtered_rows=None) -> None:
         entries, unique, total = ydb.collection_stats(self.repo.db_path)
@@ -1387,19 +1478,33 @@ class DeckView(QWidget):
             self.status.setText(lines[0] + "  " + self.status.text())
 
     def _export_deck(self) -> None:
+        """Deck als .ydk (Passcodes), lesbare Liste (.txt/.pdf) oder als
+        KI-tauglicher Markdown-Block (.md) exportieren."""
         if self.deck_id is None:
             return
         suggested = self.deck_cb.currentText().strip() or "deck"
-        path, _ = QFileDialog.getSaveFileName(
+        path, selected = QFileDialog.getSaveFileName(
             self, "Deck exportieren", suggested + ".ydk",
-            "YGOPro-Deck (*.ydk);;Alle Dateien (*)",
+            "YGOPro-Deck (*.ydk);;Textdatei (*.txt);;PDF-Datei (*.pdf);;"
+            "Markdown für KI (*.md)",
         )
         if not path:
             return
+        path, ext = _resolve_export_path(
+            path, selected,
+            {"YGOPro": ".ydk", "Text": ".txt", "PDF": ".pdf", "Markdown": ".md"},
+            default_ext=".ydk",
+        )
+        db, did = self.repo.db_path, self.deck_id
         try:
-            text = ydb.export_deck_ydk(self.repo.db_path, self.deck_id)
-            with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(text)
+            if ext == ".ydk":
+                _write_text_file(path, ydb.export_deck_ydk(db, did))
+            elif ext == ".md":
+                _write_text_file(path, ydb.export_deck_markdown(db, did))
+            elif ext == ".pdf":
+                _write_text_pdf(path, ydb.export_deck_text(db, did))
+            else:
+                _write_text_file(path, ydb.export_deck_text(db, did))
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
             return
@@ -1457,42 +1562,19 @@ class DeckView(QWidget):
         )
         if not path:
             return
+        path, ext = _resolve_export_path(
+            path, selected, {"PDF": ".pdf", "Text": ".txt"}, default_ext=".txt"
+        )
         try:
             text = ydb.export_deck_combos_text(self.repo.db_path, self.deck_id)
-            # Format folgt der Endung; ohne Endung entscheidet der Filter.
-            as_pdf = path.lower().endswith(".pdf") or (
-                "PDF" in selected and "." not in os.path.basename(path)
-            )
-            if as_pdf:
-                if not path.lower().endswith(".pdf"):
-                    path += ".pdf"
-                self._write_pdf(path, text)
+            if ext == ".pdf":
+                _write_text_pdf(path, text)
             else:
-                if "." not in os.path.basename(path):
-                    path += ".txt"
-                with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(text)
+                _write_text_file(path, text)
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
             return
         self.status.setText(f"Kombo-Linien exportiert nach {path}")
-
-    @staticmethod
-    def _write_pdf(path: str, text: str) -> None:
-        """Text unveraendert als PDF setzen (Monospace, A4). QPdfWriter
-        gehoert zu PySide6 -- keine zusaetzliche Abhaengigkeit."""
-        writer = QPdfWriter(path)
-        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-        writer.setPageMargins(
-            QMarginsF(15, 12, 15, 12), QPageLayout.Unit.Millimeter
-        )
-        doc = QTextDocument()
-        font = QFont("Consolas")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(9)
-        doc.setDefaultFont(font)
-        doc.setPlainText(text)
-        doc.print_(writer)
 
     # -- Kombo-Hilfe --------------------------------------------------------
 
@@ -2716,6 +2798,10 @@ ersten Aufruf einmal lokal zwischengespeichert.
 Hier steht dein **physischer Kartenbestand** — was du tatsächlich besitzt.
 
 - **Filter:** nach Name, Attribut und Archetyp eingrenzen.
+- **Exportieren…** — speichert die Sammlung als lesbare Liste (`.txt`/`.pdf`)
+  oder als **Markdown für KI** (`.md`, jede Karte mit vollem Effekttext und
+  Menge). Sind Filter aktiv, wird nur die gefilterte Ansicht exportiert,
+  sonst die gesamte Sammlung.
 - **Aktualisieren** — Liste neu laden.
 - **Ausgewählten Eintrag entfernen** — nimmt den markierten Bestand heraus.
 
@@ -2750,12 +2836,16 @@ Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
   (Kopien in anderen Decks binden Bestand). Das ist nur ein **Hinweis** —
   Deckbuilding über den Bestand hinaus bleibt für geplante Käufe erlaubt.
 
-## Import & Export (.ydk)
+## Import & Export
 
-- **Importieren… / Exportieren…** lesen und schreiben `.ydk`-Dateien
-  (das Standardformat; die Karten-ID ist der Passcode).
-- Der Import erzwingt die 3-Kopien-Regel, sortiert Main/Extra korrekt und
-  meldet unbekannte Passcodes im Bericht, statt abzubrechen.
+- **Importieren…** liest `.ydk`-Dateien (das Standardformat; die Karten-ID
+  ist der Passcode). Der Import erzwingt die 3-Kopien-Regel, sortiert
+  Main/Extra korrekt und meldet unbekannte Passcodes im Bericht, statt
+  abzubrechen.
+- **Exportieren…** schreibt das Deck wahlweise als `.ydk` (Passcodes), als
+  lesbare Liste (`.txt`/`.pdf`) oder als **Markdown für KI** (`.md`) — Letzteres
+  enthält jede Karte mit vollem Effekttext, Rolle, Konsistenz und Kombo-Linien,
+  damit ein KI-System das Deck ohne Nachschlagen beurteilen kann.
 
 ## Korpus… (Referenz-Decks)
 

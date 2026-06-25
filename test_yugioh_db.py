@@ -397,6 +397,63 @@ class DbTests(unittest.TestCase):
         # ... und bindet keinen physischen Bestand.
         self.assertEqual(ydb.card_bound_in_decks(self.db, self.main_id), 0)
 
+    # -- Sammlungs-/Deck-Export ------------------------------------------
+
+    def test_export_deck_text_lists_zones(self):
+        deck = ydb.create_deck(self.db, "Export-Deck")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=2)
+        ydb.add_card_to_deck(self.db, deck, self.extra_id, zone="extra", count=1)
+        text = ydb.export_deck_text(self.db, deck)
+        self.assertIn("Deck: Export-Deck", text)
+        self.assertIn("== Main Deck (2) ==", text)
+        self.assertIn("== Extra Deck (1) ==", text)
+        self.assertIn("2x ", text)
+
+    def test_export_deck_text_unknown_deck_raises(self):
+        with self.assertRaises(ValueError):
+            ydb.export_deck_text(self.db, 999999)
+
+    def test_export_deck_markdown_has_effects_role_and_combos(self):
+        deck = ydb.create_deck(self.db, "MD-Deck")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=1)
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, self.main_id, 1)
+        ydb.set_combo_card_role(self.db, combo, self.main_id, "starter")
+        md = ydb.export_deck_markdown(self.db, deck)
+        self.assertIn("# Deck: MD-Deck", md)
+        self.assertIn("## Main Deck (1)", md)
+        self.assertIn("- Effekt:", md)            # voller Kartentext
+        self.assertIn("Starter", md)              # Rolle uebernommen
+        self.assertIn("## Konsistenz & Kombo-Linien", md)
+
+    def test_export_collection_text_respects_filter(self):
+        # Eine bekannte Karte in den Bestand legen und gezielt danach filtern.
+        ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="TST-001")
+        name = sqlite3.connect(self.db).execute(
+            "SELECT COALESCE(name_de, name) FROM cards WHERE id = ?",
+            (self.unowned_id,),
+        ).fetchone()[0]
+        full = ydb.export_collection_text(self.db)
+        self.assertIn("Sammlung", full)
+        self.assertIn(name, full)
+        # Filter auf einen Namensteil grenzt die Ausgabe ein.
+        filtered = ydb.export_collection_text(self.db, text=name)
+        self.assertIn(name, filtered)
+        self.assertIn("TST-001", filtered)
+
+    def test_export_collection_markdown_aggregates_copies(self):
+        # Zwei Drucke derselben Karte -> in der KI-Ansicht eine Karte, Menge 3.
+        ydb.add_to_collection(self.db, self.unowned_id, 1, set_code="A")
+        ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="B")
+        name = sqlite3.connect(self.db).execute(
+            "SELECT COALESCE(name_de, name) FROM cards WHERE id = ?",
+            (self.unowned_id,),
+        ).fetchone()[0]
+        md = ydb.export_collection_markdown(self.db)
+        self.assertIn("# Yu-Gi-Oh!-Sammlung", md)
+        self.assertIn(f"### 3x {name}", md)
+        self.assertIn("- Effekt:", md)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
