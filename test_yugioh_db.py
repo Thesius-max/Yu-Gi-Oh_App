@@ -213,6 +213,35 @@ class DbTests(unittest.TestCase):
         self.assertEqual(name_de, "Mein Testname")
         self.assertIsNotNone(hit)           # FTS-Index mitgepflegt
 
+    def test_untranslated_filter_and_count(self):
+        # Eine unuebersetzte Karte aus dem echten Bestand greifen.
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT col.card_id FROM collection col "
+                "JOIN cards c ON c.id = col.card_id "
+                "WHERE c.name_de IS NULL LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row, "Dev-DB sollte unuebersetzte Bestandskarten haben")
+        card_id = row["card_id"]
+
+        before = ydb.collection_untranslated_count(self.db)
+        rows = ydb.list_collection(self.db, untranslated_only=True)
+        # Filter liefert ausschliesslich Karten ohne deutsche Uebersetzung.
+        self.assertTrue(all(r["name_de"] is None for r in rows))
+        # Zaehler == verschiedene Karten in der gefilterten Ansicht.
+        self.assertEqual(before, len({r["card_id"] for r in rows}))
+        self.assertIn(card_id, {r["card_id"] for r in rows})
+
+        # Uebersetzen -> faellt aus Filter und Zaehler.
+        ydb.set_card_translation(self.db, card_id, name_de="Testname DE")
+        self.assertEqual(ydb.collection_untranslated_count(self.db), before - 1)
+        rows2 = ydb.list_collection(self.db, untranslated_only=True)
+        self.assertNotIn(card_id, {r["card_id"] for r in rows2})
+
     # -- YDK-Roundtrip ----------------------------------------------------
 
     def test_ydk_export_import_roundtrip(self):

@@ -45,7 +45,7 @@ APP_DIR_NAME = "YugiohSammlung"
 # App-Version: eine Nummer fuer alle Plattform-Builds (Windows + macOS).
 # Release-Ritual: hochzaehlen -> committen -> Tag "v<version>" pushen; die CI
 # baut dann alle drei ZIPs und haengt sie an EIN gemeinsames GitHub-Release.
-APP_VERSION = "0.6.6"
+APP_VERSION = "0.6.7"
 RELEASES_API_URL = (
     "https://api.github.com/repos/Thesius-max/Yu-Gi-Oh_App/releases/latest"
 )
@@ -630,10 +630,12 @@ def list_collection(
     category: Optional[str] = None,
     attribute: Optional[str] = None,
     archetype: Optional[str] = None,
+    untranslated_only: bool = False,
 ) -> list[sqlite3.Row]:
     """Bestandseintraege mit Kartenname -- ein Eintrag (Druck) pro Zeile.
     Optional gefiltert: text (Namenssuche de/en), category (Wert von
-    card_category), attribute, archetype."""
+    card_category), attribute, archetype, untranslated_only (nur Karten
+    ohne eigene/API-Uebersetzung, also name_de IS NULL)."""
     sql = """SELECT col.entry_id, col.card_id, c.name, c.name_de, c.type,
                     c.attribute, c.archetype,
                     col.quantity, col.set_code, col.edition,
@@ -645,6 +647,8 @@ def list_collection(
         like = f"%{text.strip()}%"
         where.append("(c.name LIKE ? OR c.name_de LIKE ?)")
         args += [like, like]
+    if untranslated_only:
+        where.append("c.name_de IS NULL")
     if attribute:
         where.append("c.attribute = ?")
         args.append(attribute)
@@ -761,15 +765,28 @@ def collection_stats(db_path: str) -> tuple[int, int, int]:
         return row["entries"], row["unique_cards"], row["total"]
 
 
+def collection_untranslated_count(db_path: str) -> int:
+    """Anzahl verschiedener Karten im Bestand ohne deutsche Uebersetzung
+    (name_de IS NULL). Zaehlt Karten, nicht Bestandseintraege/Drucke."""
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            """SELECT COUNT(DISTINCT col.card_id) AS n
+               FROM collection col JOIN cards c ON c.id = col.card_id
+               WHERE c.name_de IS NULL"""
+        ).fetchone()
+        return int(row["n"])
+
+
 def collection_overview(db_path: str) -> list[sqlite3.Row]:
     """Bestand mit Kartennamen und Gesamtmenge je Karte."""
     with _conn(db_path) as conn:
         return conn.execute(
-            """SELECT c.id, c.name, c.type, SUM(col.quantity) AS total
+            """SELECT c.id, COALESCE(c.name_de, c.name) AS name, c.type,
+                      SUM(col.quantity) AS total
                FROM collection col
                JOIN cards c ON c.id = col.card_id
                GROUP BY c.id
-               ORDER BY c.name"""
+               ORDER BY COALESCE(c.name_de, c.name)"""
         ).fetchall()
 
 
@@ -871,11 +888,12 @@ def delete_deck(db_path: str, deck_id: int) -> None:
 def deck_cards(db_path: str, deck_id: int, zone: str) -> list[sqlite3.Row]:
     with _conn(db_path) as conn:
         return conn.execute(
-            """SELECT dc.card_id, c.name, c.type, c.frame_type, dc.quantity
+            """SELECT dc.card_id, COALESCE(c.name_de, c.name) AS name,
+                      c.type, c.frame_type, dc.quantity
                FROM deck_cards dc
                JOIN cards c ON c.id = dc.card_id
                WHERE dc.deck_id = ? AND dc.zone = ?
-               ORDER BY c.name""",
+               ORDER BY COALESCE(c.name_de, c.name)""",
             (deck_id, zone),
         ).fetchall()
 
@@ -1117,7 +1135,7 @@ def validate_deck(db_path: str, deck_id: int) -> list[tuple[bool, str]]:
     ]
     with _conn(db_path) as conn:
         over = conn.execute(
-            """SELECT c.name, SUM(dc.quantity) AS n
+            """SELECT COALESCE(c.name_de, c.name) AS name, SUM(dc.quantity) AS n
                FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
                WHERE dc.deck_id = ?
                GROUP BY dc.card_id HAVING n > ?""",
@@ -1521,10 +1539,10 @@ def remove_combo_card(db_path: str, combo_id: int, card_id: int) -> None:
 def combo_cards(db_path: str, combo_id: int) -> list[sqlite3.Row]:
     with _conn(db_path) as conn:
         return conn.execute(
-            """SELECT cc.card_id, c.name, c.type, c.frame_type,
-                      cc.quantity, cc.role
+            """SELECT cc.card_id, COALESCE(c.name_de, c.name) AS name,
+                      c.type, c.frame_type, cc.quantity, cc.role
                FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
-               WHERE cc.combo_id = ? ORDER BY c.name""",
+               WHERE cc.combo_id = ? ORDER BY COALESCE(c.name_de, c.name)""",
             (combo_id,),
         ).fetchall()
 
@@ -1581,13 +1599,14 @@ def _combo_coverage_deck(conn: sqlite3.Connection, combo_id: int, deck_id: int) 
     """Abdeckung gegen ein Deck (Main+Extra) auf einer offenen Verbindung --
     so koennen combos_for_deck/Export sie ohne N+1-Verbindungen wiederholen."""
     pieces = conn.execute(
-        """SELECT cc.card_id, c.name, c.type, c.frame_type,
+        """SELECT cc.card_id, COALESCE(c.name_de, c.name) AS name,
+                  c.type, c.frame_type,
                   cc.quantity AS needed,
                   COALESCE((SELECT SUM(dc.quantity) FROM deck_cards dc
                             WHERE dc.deck_id = ? AND dc.card_id = cc.card_id
                               AND dc.zone IN ('main','extra')), 0) AS have
            FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
-           WHERE cc.combo_id = ? ORDER BY c.name""",
+           WHERE cc.combo_id = ? ORDER BY COALESCE(c.name_de, c.name)""",
         (deck_id, combo_id),
     ).fetchall()
     return _coverage_result(pieces)
@@ -1596,12 +1615,13 @@ def _combo_coverage_deck(conn: sqlite3.Connection, combo_id: int, deck_id: int) 
 def _combo_coverage_collection(conn: sqlite3.Connection, combo_id: int) -> dict:
     """Abdeckung gegen die Sammlung auf einer offenen Verbindung."""
     pieces = conn.execute(
-        """SELECT cc.card_id, c.name, c.type, c.frame_type,
+        """SELECT cc.card_id, COALESCE(c.name_de, c.name) AS name,
+                  c.type, c.frame_type,
                   cc.quantity AS needed,
                   COALESCE((SELECT SUM(col.quantity) FROM collection col
                             WHERE col.card_id = cc.card_id), 0) AS have
            FROM combo_cards cc JOIN cards c ON c.id = cc.card_id
-           WHERE cc.combo_id = ? ORDER BY c.name""",
+           WHERE cc.combo_id = ? ORDER BY COALESCE(c.name_de, c.name)""",
         (combo_id,),
     ).fetchall()
     return _coverage_result(pieces)

@@ -220,6 +220,9 @@ _CATEGORY_ORDER = ("monster", "spell", "trap", "other")
 # Theme-Konstanten definiert.
 _GROUP_HEADER_BG = QColor("#241a33")  # = _PANEL
 _GROUP_HEADER_FG = QColor("#d4af37")  # = _GOLD
+# Karten ohne deutsche Uebersetzung (zeigen den englischen Namen als Fallback)
+# in der Sammlungstabelle warm-orange hervorheben -- abgesetzt vom Gold.
+_UNTRANSLATED_FG = QColor("#e08a3c")
 
 # Anzeigenamen der Baustein-Rollen (die Begriffe sind im deutschen
 # Yu-Gi-Oh-Sprachgebrauch etabliert, daher unübersetzt). Eine Quelle der
@@ -372,7 +375,8 @@ class CardRepository:
             )
 
         sql = base + "".join(" AND " + c for c in clauses)
-        sql += (" ORDER BY cards_fts.rank LIMIT ?" if text.strip() else " ORDER BY c.name LIMIT ?")
+        sql += (" ORDER BY cards_fts.rank LIMIT ?" if text.strip()
+                else " ORDER BY COALESCE(c.name_de, c.name) LIMIT ?")
         params.append(limit)
 
         conn = ydb._connect(self.db_path)
@@ -735,6 +739,13 @@ class CollectionView(QWidget):
         filters.addWidget(self.filter_attr)
         filters.addWidget(QLabel("Archetyp:"))
         filters.addWidget(self.filter_arch)
+        self.filter_untranslated = QCheckBox("Nur unübersetzte")
+        self.filter_untranslated.setToolTip(
+            "Nur Karten ohne deutsche Übersetzung zeigen (Anzeige fällt dort "
+            "auf den englischen Namen zurück)."
+        )
+        self.filter_untranslated.toggled.connect(self.refresh)
+        filters.addWidget(self.filter_untranslated)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
@@ -784,6 +795,7 @@ class CollectionView(QWidget):
             category=self.filter_cat.currentData(),
             attribute=self.filter_attr.currentData(),
             archetype=self.filter_arch.currentData(),
+            untranslated_only=self.filter_untranslated.isChecked(),
         )
         # Nach Kartenklasse bucketn; Reihenfolge je Gruppe bleibt (Name).
         buckets: dict[str, list] = {c: [] for c in _CATEGORY_ORDER}
@@ -821,6 +833,15 @@ class CollectionView(QWidget):
         name_item = QTableWidgetItem(row["name_de"] or row["name"])
         # entry_id an der Namenszelle ablegen -- identifiziert die Zeile.
         name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
+        # Karten ohne deutsche Uebersetzung sichtbar markieren -- der Name oben
+        # ist dann der englische Fallback.
+        if not row["name_de"]:
+            name_item.setForeground(_UNTRANSLATED_FG)
+            name_item.setToolTip(
+                "Noch keine deutsche Übersetzung — angezeigt wird der "
+                "englische Name als Fallback. Übersetzung über den "
+                "DE-Button im Detailbereich des Suche-Tabs ergänzbar."
+            )
         self.table.setItem(r, 0, name_item)
 
         spin = QSpinBox()
@@ -865,6 +886,7 @@ class CollectionView(QWidget):
             or self.filter_cat.currentData()
             or self.filter_attr.currentData()
             or self.filter_arch.currentData()
+            or self.filter_untranslated.isChecked()
         )
 
     def _export(self) -> None:
@@ -915,6 +937,9 @@ class CollectionView(QWidget):
             f"{entries} Einträge  ·  {unique} verschiedene Karten  ·  "
             f"{total} Karten gesamt"
         )
+        untranslated = ydb.collection_untranslated_count(self.repo.db_path)
+        if untranslated:
+            text += f"  ·  {untranslated} ohne deutsche Übersetzung"
         if filtered_rows is not None and self._filters_active():
             shown = sum(r["quantity"] for r in filtered_rows)
             text += f"  ·  Filter: {len(filtered_rows)} Einträge ({shown} Karten)"
