@@ -29,11 +29,13 @@ import shutil
 import sys
 
 from PySide6.QtCore import (
-    Qt, QMarginsF, QObject, QRunnable, QThreadPool, QTimer, QUrl, Signal,
+    Qt, QEvent, QMarginsF, QObject, QPoint, QRunnable, QThreadPool, QTimer,
+    QUrl, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QFont, QImage, QPageLayout, QPageSize,
-    QPalette, QPdfWriter, QPixmap, QPixmapCache, QTextCursor, QTextDocument,
+    QColor, QDesktopServices, QFont, QGuiApplication, QImage, QPageLayout,
+    QPageSize, QPalette, QPdfWriter, QPixmap, QPixmapCache, QTextCursor,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
@@ -161,6 +163,128 @@ class _DbTask(QRunnable):
             pass
 
 
+class _HoverCardPreview(QObject):
+    """Schwebende Kartenbild-Vorschau fuer Item-Views (QListWidget/
+    QTableWidget). Faehrt die Maus ueber eine Zeile mit zugeordneter Karte,
+    erscheint neben dem Cursor ein lazy geladenes Kartenbild -- dieselbe
+    Quelle und derselbe Cache wie das grosse Detailbild (card_images/,
+    QPixmapCache). Beruehrt die Datenschicht nicht.
+
+    'resolver(pos)' liefert die card_id unter einer Viewport-Position oder
+    None (Kopfzeilen/Leerraum -> keine Vorschau). Eine Instanz je View; sie
+    haengt sich per Eventfilter an dessen Viewport und raeumt mit der View ab
+    (QObject-Parent)."""
+
+    PREVIEW_W, PREVIEW_H = 200, 292
+
+    def __init__(self, view, resolver):
+        super().__init__(view)
+        self._view = view
+        self._resolver = resolver
+        self._current = None          # gezeigte/erwartete card_id
+        self._last_pos = QPoint()     # letzte globale Cursorposition
+
+        self._popup = QLabel(view)
+        self._popup.setObjectName("HoverCardPreview")
+        self._popup.setWindowFlags(Qt.WindowType.ToolTip)
+        self._popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._popup.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._popup.hide()
+
+        self._signals = _ImageSignals()
+        self._signals.loaded.connect(self._on_loaded)
+        self._signals.failed.connect(self._on_failed)
+
+        view.setMouseTracking(True)
+        view.viewport().setMouseTracking(True)
+        view.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            self._last_pos = event.globalPosition().toPoint()
+            cid = self._resolver(event.position().toPoint())
+            if cid != self._current:
+                self._update(cid)
+            elif cid is not None and self._popup.isVisible():
+                self._place()
+        elif et in (
+            QEvent.Type.Leave, QEvent.Type.Hide, QEvent.Type.Wheel,
+            QEvent.Type.MouseButtonPress,
+        ):
+            self._hide()
+        return False
+
+    def _update(self, cid) -> None:
+        self._current = cid
+        if cid is None:
+            self._hide()
+            return
+        key = f"hover:{cid}"
+        pix = QPixmapCache.find(key)
+        if pix is not None and not pix.isNull():
+            self._show_pixmap(pix)
+            return
+        path = os.path.join(ydb.IMAGE_DIR, f"{cid}.jpg")
+        if os.path.exists(path):
+            pix = QPixmap(path)
+            if not pix.isNull():
+                pix = self._scaled(pix)
+                QPixmapCache.insert(key, pix)
+                self._show_pixmap(pix)
+                return
+        # Noch nicht lokal -> Platzhalter zeigen, im Hintergrund nachladen.
+        self._popup.setPixmap(QPixmap())
+        self._popup.setText("Lade …")
+        self._popup.setFixedSize(self.PREVIEW_W, self.PREVIEW_H)
+        self._place()
+        self._popup.show()
+        QThreadPool.globalInstance().start(
+            _ImageLoader(cid, IMAGE_URL.format(cid), self._signals)
+        )
+
+    def _show_pixmap(self, pix: QPixmap) -> None:
+        self._popup.setText("")
+        self._popup.setPixmap(pix)
+        self._popup.setFixedSize(pix.size())
+        self._place()
+        self._popup.show()
+
+    def _on_loaded(self, card_id: int, img: QImage) -> None:
+        pix = self._scaled(QPixmap.fromImage(img))
+        QPixmapCache.insert(f"hover:{card_id}", pix)
+        if card_id == self._current and self._popup.isVisible():
+            self._show_pixmap(pix)
+
+    def _on_failed(self, card_id: int) -> None:
+        if card_id == self._current and self._popup.isVisible():
+            self._popup.setText("(Bild offline nicht verfügbar)")
+
+    def _hide(self) -> None:
+        self._current = None
+        self._popup.hide()
+
+    def _place(self) -> None:
+        pt = self._last_pos
+        w, h = self._popup.width(), self._popup.height()
+        screen = QGuiApplication.screenAt(pt) or QGuiApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        x = pt.x() + 24
+        if x + w > geo.right():
+            x = pt.x() - w - 24            # nach links kippen, wenn rechts kein Platz
+        y = max(geo.top(), min(pt.y() - h // 2, geo.bottom() - h))
+        self._popup.move(x, y)
+
+    @classmethod
+    def _scaled(cls, pix: QPixmap) -> QPixmap:
+        return pix.scaled(
+            cls.PREVIEW_W, cls.PREVIEW_H,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Übersetzungstabellen (Englisch → Deutsch)
 # ---------------------------------------------------------------------------
@@ -232,6 +356,9 @@ _ROLE_DE = ydb.ROLE_LABEL
 _PIECE_ROLE_DATA = Qt.ItemDataRole.UserRole + 1
 # Zweiter Daten-Slot im Starthand-Picker: Kopienzahl der Karte (UserRole = card_id).
 _SIM_COPIES_DATA = Qt.ItemDataRole.UserRole + 1
+# Zweiter Daten-Slot der Sammlungs-Namenszelle: card_id (UserRole = entry_id) --
+# fuer die Hover-Bildvorschau, die das Kartenbild und nicht den Eintrag braucht.
+_COLLECTION_CARD_ID = Qt.ItemDataRole.UserRole + 1
 
 
 def _pct(p: float) -> str:
@@ -460,6 +587,72 @@ class CardSearchDialog(QDialog):
 # Detailansicht (rechte Spalte)
 # ---------------------------------------------------------------------------
 
+def _format_card_stats(card) -> str:
+    """Karten-Stat-Zeile mit deutscher Beschriftung (Typ • Sorte • Attribut •
+    Stufe • ATK/DEF • Archetyp). Geteilt von DetailPanel und CardDetailDialog."""
+    parts = []
+    if card["type"]:
+        parts.append(_TYPE_DE.get(card["type"], card["type"]))
+    if card["race"]:
+        parts.append(_RACE_DE.get(card["race"], card["race"]))
+    if card["attribute"]:
+        parts.append(_ATTR_DE.get(card["attribute"], card["attribute"]))
+    if card["level"] is not None:
+        parts.append(f"Stufe {card['level']}")
+    if card["atk"] is not None or card["def"] is not None:
+        atk = card["atk"] if card["atk"] is not None else "—"
+        # Link-Monster haben keine DEF (def ist NULL) -> nicht "None" anzeigen.
+        if card["def"] is not None:
+            parts.append(f"ATK {atk} / DEF {card['def']}")
+        else:
+            parts.append(f"ATK {atk}")
+    if card["archetype"]:
+        parts.append(f"Archetyp: {card['archetype']}")
+    return "  •  ".join(parts)
+
+
+def edit_card_translation(repo: "CardRepository", card_id: int, parent) -> bool:
+    """Eigene DE-Uebersetzung erfassen/aendern (Override; ueberlebt
+    Karten-Updates). Leere Felder = kein Override fuer dieses Feld. Rueckgabe:
+    True, wenn gespeichert wurde. Geteilt von DetailPanel und CardDetailDialog;
+    der Aufrufer aktualisiert danach seine Anzeige."""
+    card = repo.get_card(card_id)
+    if card is None:
+        return False
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Deutsche Übersetzung bearbeiten")
+    dlg.resize(420, 360)
+    v = QVBoxLayout(dlg)
+    v.addWidget(QLabel(f"Karte: {card['name']}"))
+    form = QFormLayout()
+    name_edit = QLineEdit(card["name_de"] or "")
+    form.addRow("Name (DE)", name_edit)
+    v.addLayout(form)
+    v.addWidget(QLabel("Kartentext (DE):"))
+    desc_edit = QTextEdit()
+    desc_edit.setPlainText(card["desc_de"] or "")
+    v.addWidget(desc_edit, stretch=1)
+    hint = QLabel("Leere Felder lassen die API-Daten unangetastet.")
+    hint.setStyleSheet("color: #888;")
+    v.addWidget(hint)
+    btn_row = QHBoxLayout()
+    ok_btn = QPushButton("Speichern")
+    ok_btn.clicked.connect(dlg.accept)
+    cancel_btn = QPushButton("Abbrechen")
+    cancel_btn.clicked.connect(dlg.reject)
+    btn_row.addStretch()
+    btn_row.addWidget(ok_btn)
+    btn_row.addWidget(cancel_btn)
+    v.addLayout(btn_row)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return False
+    ydb.set_card_translation(
+        repo.db_path, card_id,
+        name_de=name_edit.text(), desc_de=desc_edit.toPlainText(),
+    )
+    return True
+
+
 class DetailPanel(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -550,47 +743,12 @@ class DetailPanel(QWidget):
         self.edit_trans_btn.setEnabled(on)
 
     def _edit_translation(self) -> None:
-        """Eigene DE-Uebersetzung erfassen/aendern (Override; ueberlebt
-        Karten-Updates). Leere Felder = kein Override fuer dieses Feld."""
         if self.current_id is None:
             return
-        card = self.repo.get_card(self.current_id)
-        if card is None:
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Deutsche Übersetzung bearbeiten")
-        dlg.resize(420, 360)
-        v = QVBoxLayout(dlg)
-        v.addWidget(QLabel(f"Karte: {card['name']}"))
-        form = QFormLayout()
-        name_edit = QLineEdit(card["name_de"] or "")
-        form.addRow("Name (DE)", name_edit)
-        v.addLayout(form)
-        v.addWidget(QLabel("Kartentext (DE):"))
-        desc_edit = QTextEdit()
-        desc_edit.setPlainText(card["desc_de"] or "")
-        v.addWidget(desc_edit, stretch=1)
-        hint = QLabel("Leere Felder lassen die API-Daten unangetastet.")
-        hint.setStyleSheet("color: #888;")
-        v.addWidget(hint)
-        btn_row = QHBoxLayout()
-        ok_btn = QPushButton("Speichern")
-        ok_btn.clicked.connect(dlg.accept)
-        cancel_btn = QPushButton("Abbrechen")
-        cancel_btn.clicked.connect(dlg.reject)
-        btn_row.addStretch()
-        btn_row.addWidget(ok_btn)
-        btn_row.addWidget(cancel_btn)
-        v.addLayout(btn_row)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        ydb.set_card_translation(
-            self.repo.db_path, self.current_id,
-            name_de=name_edit.text(), desc_de=desc_edit.toPlainText(),
-        )
-        updated = self.repo.get_card(self.current_id)
-        if updated is not None:
-            self.show_card(updated)
+        if edit_card_translation(self.repo, self.current_id, self):
+            updated = self.repo.get_card(self.current_id)
+            if updated is not None:
+                self.show_card(updated)
 
     def _add_to_combo(self) -> None:
         if self.current_id is None or self.add_to_combo_callback is None:
@@ -609,26 +767,7 @@ class DetailPanel(QWidget):
     def show_card(self, card) -> None:
         self.current_id = card["id"]
         self.name.setText(card["name_de"] or card["name"])
-
-        parts = []
-        if card["type"]:
-            parts.append(_TYPE_DE.get(card["type"], card["type"]))
-        if card["race"]:
-            parts.append(_RACE_DE.get(card["race"], card["race"]))
-        if card["attribute"]:
-            parts.append(_ATTR_DE.get(card["attribute"], card["attribute"]))
-        if card["level"] is not None:
-            parts.append(f"Stufe {card['level']}")
-        if card["atk"] is not None or card["def"] is not None:
-            atk = card["atk"] if card["atk"] is not None else "—"
-            # Link-Monster haben keine DEF (def ist NULL) -> nicht "None" anzeigen.
-            if card["def"] is not None:
-                parts.append(f"ATK {atk} / DEF {card['def']}")
-            else:
-                parts.append(f"ATK {atk}")
-        if card["archetype"]:
-            parts.append(f"Archetyp: {card['archetype']}")
-        self.stats.setText("  •  ".join(parts))
+        self.stats.setText(_format_card_stats(card))
         self.text.setPlainText(card["desc_de"] or card["description"] or "")
 
         self._load_image(card["id"])
@@ -689,6 +828,121 @@ class DetailPanel(QWidget):
             return
         ydb.add_to_collection(self.repo.db_path, self.current_id, self.qty.value())
         self._update_owned(self.current_id)
+
+
+class CardDetailDialog(QDialog):
+    """Read-only Detail-Pop-up einer Karte (Bild, deutsche Infos, Kartentext)
+    -- geoeffnet per Doppelklick im Sammlung-Tab. Bietet zusaetzlich den
+    „✎ DE"-Button zum Uebersetzung-Bearbeiten; nach dem Speichern meldet
+    'translation_changed', damit der aufrufende Tab seine Liste aktualisiert.
+    Eine Instanz wird je View wiederverwendet (load() zeigt die naechste
+    Karte). Bild und Cache wie DetailPanel, nur in groesserer Darstellung."""
+
+    translation_changed = Signal()
+    IMG_W, IMG_H = 300, 438
+
+    def __init__(self, repo: "CardRepository", parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.current_id: int | None = None
+        self.resize(360, 660)
+
+        self._img_signals = _ImageSignals()
+        self._img_signals.loaded.connect(self._on_image_loaded)
+        self._img_signals.failed.connect(self._on_image_failed)
+
+        layout = QVBoxLayout(self)
+
+        self.image = QLabel("")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setMinimumSize(self.IMG_W, self.IMG_H)
+        self.image.setStyleSheet("border: 1px solid #555; color: #888;")
+
+        self.name = QLabel("")
+        self.name.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self.name.setWordWrap(True)
+        self.edit_trans_btn = QPushButton("✎ DE")
+        self.edit_trans_btn.setToolTip("Deutsche Übersetzung bearbeiten")
+        self.edit_trans_btn.setFixedWidth(48)
+        self.edit_trans_btn.clicked.connect(self._edit_translation)
+
+        self.stats = QLabel("")
+        self.stats.setWordWrap(True)
+
+        self.text = QTextEdit()
+        self.text.setReadOnly(True)
+
+        close_btn = QPushButton("Schließen")
+        close_btn.clicked.connect(self.close)
+
+        layout.addWidget(self.image)
+        name_row = QHBoxLayout()
+        name_row.addWidget(self.name, stretch=1)
+        name_row.addWidget(
+            self.edit_trans_btn, alignment=Qt.AlignmentFlag.AlignTop
+        )
+        layout.addLayout(name_row)
+        layout.addWidget(self.stats)
+        layout.addWidget(self.text, stretch=1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    def load(self, card_id: int) -> None:
+        """Karte anzeigen (auch beim Wiederverwenden der Instanz)."""
+        card = self.repo.get_card(card_id)
+        if card is None:
+            return
+        self.current_id = card_id
+        title = card["name_de"] or card["name"]
+        self.setWindowTitle(title)
+        self.name.setText(title)
+        self.stats.setText(_format_card_stats(card))
+        self.text.setPlainText(card["desc_de"] or card["description"] or "")
+        self._load_image(card_id)
+
+    @classmethod
+    def _scaled(cls, pixmap: QPixmap) -> QPixmap:
+        return pixmap.scaled(
+            cls.IMG_W, cls.IMG_H,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def _load_image(self, card_id: int) -> None:
+        key = f"detail:{card_id}"
+        cached = QPixmapCache.find(key)
+        if cached is not None and not cached.isNull():
+            self.image.setPixmap(cached)
+            return
+        path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
+        if os.path.exists(path):
+            pix = self._scaled(QPixmap(path))
+            QPixmapCache.insert(key, pix)
+            self.image.setPixmap(pix)
+            return
+        self.image.setText("Lade …")
+        QThreadPool.globalInstance().start(
+            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
+        )
+
+    def _on_image_loaded(self, card_id: int, img: QImage) -> None:
+        pix = self._scaled(QPixmap.fromImage(img))
+        QPixmapCache.insert(f"detail:{card_id}", pix)
+        if card_id == self.current_id:
+            self.image.setPixmap(pix)
+
+    def _on_image_failed(self, card_id: int) -> None:
+        if card_id == self.current_id:
+            self.image.setText("(Bild offline nicht verfügbar)")
+
+    def _edit_translation(self) -> None:
+        if self.current_id is None:
+            return
+        if edit_card_translation(self.repo, self.current_id, self):
+            self.load(self.current_id)
+            self.translation_changed.emit()
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +1021,37 @@ class CollectionView(QWidget):
         layout.addLayout(toolbar)
         layout.addLayout(filters)
         layout.addWidget(self.table)
+        # Schwebende Kartenbild-Vorschau beim Ueberfahren einer Zeile.
+        self._hover = _HoverCardPreview(self.table, self._hover_card_id)
+        # Doppelklick auf eine Karte -> read-only Detail-Pop-up (lazy angelegt,
+        # je View wiederverwendet).
+        self._detail_dialog: CardDetailDialog | None = None
+        self.table.cellDoubleClicked.connect(self._open_detail)
         self.refresh()
+
+    def _hover_card_id(self, pos):
+        """card_id der Tabellenzeile unter 'pos' (Viewport-Koord.) oder None
+        bei Gruppen-Kopfzeilen/Leerraum -- speist die Hover-Bildvorschau."""
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(_COLLECTION_CARD_ID) if item else None
+
+    def _open_detail(self, row: int, _col: int) -> None:
+        """Detail-Pop-up der Karte in 'row' oeffnen; Gruppen-Kopfzeilen
+        (ohne card_id) ignorieren."""
+        item = self.table.item(row, 0)
+        card_id = item.data(_COLLECTION_CARD_ID) if item else None
+        if card_id is None:
+            return
+        if self._detail_dialog is None:
+            self._detail_dialog = CardDetailDialog(self.repo, self)
+            self._detail_dialog.translation_changed.connect(self.refresh)
+        self._detail_dialog.load(card_id)
+        self._detail_dialog.show()
+        self._detail_dialog.raise_()
+        self._detail_dialog.activateWindow()
 
     def _reload_filter_values(self) -> None:
         """Attribut-/Archetyp-Dropdowns aus dem Bestand neu befuellen;
@@ -849,6 +1133,8 @@ class CollectionView(QWidget):
         name_item = QTableWidgetItem(row["name_de"] or row["name"])
         # entry_id an der Namenszelle ablegen -- identifiziert die Zeile.
         name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
+        # card_id zusaetzlich fuer die Hover-Bildvorschau.
+        name_item.setData(_COLLECTION_CARD_ID, row["card_id"])
         # Karten ohne deutsche Uebersetzung sichtbar markieren -- der Name oben
         # ist dann der englische Fallback.
         if not row["name_de"]:
@@ -930,6 +1216,7 @@ class CollectionView(QWidget):
             category=self.filter_cat.currentData(),
             attribute=self.filter_attr.currentData(),
             archetype=self.filter_arch.currentData(),
+            untranslated_only=self.filter_untranslated.isChecked(),
         )
         try:
             if ext == ".md":
@@ -982,6 +1269,8 @@ class ZonePanel(QGroupBox):
         v = QVBoxLayout(self)
         self.list = QListWidget()
         v.addWidget(self.list)
+        # Schwebende Kartenbild-Vorschau beim Ueberfahren einer Karte.
+        self._hover = _HoverCardPreview(self.list, self._hover_card_id)
 
         add_btn = QPushButton("+ Karte hinzuf\u00fcgen")
         add_btn.clicked.connect(lambda: owner.add_card_dialog(self.zone))
@@ -1008,6 +1297,12 @@ class ZonePanel(QGroupBox):
 
     def selected_card_id(self):
         item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _hover_card_id(self, pos):
+        """card_id der Karte unter 'pos' (Viewport-Koord.) oder None bei
+        Gruppen-Kopfzeilen/Leerraum -- speist die Hover-Bildvorschau."""
+        item = self.list.itemAt(pos)
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
     def populate(self, rows, shortages: dict[int, int] | None = None) -> int:
@@ -3607,6 +3902,10 @@ QProgressBar::chunk { background: #d4af37; border-radius: 3px; }
 QToolTip {
     background: #241a33; color: #efe9f5;
     border: 1px solid #d4af37; padding: 3px;
+}
+#HoverCardPreview {
+    background: #241a33; color: #9b90b5;
+    border: 1px solid #d4af37; padding: 2px;
 }
 """
 
