@@ -1195,7 +1195,7 @@ def export_deck_ydk(db_path: str, deck_id: int) -> str:
                 """SELECT dc.card_id, dc.quantity
                    FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
                    WHERE dc.deck_id = ? AND dc.zone = ?
-                   ORDER BY c.name""",
+                   ORDER BY COALESCE(c.name_de, c.name)""",
                 (deck_id, zone),
             ).fetchall()
             for r in rows:
@@ -1981,6 +1981,7 @@ _EXPORT_CATEGORY_ORDER = ("monster", "spell", "trap", "other")
 def _export_filter_note(
     text: Optional[str], category: Optional[str],
     attribute: Optional[str], archetype: Optional[str],
+    untranslated_only: bool = False,
 ) -> str:
     """Kurzbeschreibung der aktiven Sammlungs-Filter (leer = keine)."""
     parts = []
@@ -1992,6 +1993,8 @@ def _export_filter_note(
         parts.append(f"Attribut={attribute}")
     if archetype:
         parts.append(f"Archetyp={archetype}")
+    if untranslated_only:
+        parts.append("nur unübersetzte")
     return " · ".join(parts)
 
 
@@ -2061,12 +2064,18 @@ def _card_md_block(
 def export_collection_text(
     db_path: str, text: Optional[str] = None, category: Optional[str] = None,
     attribute: Optional[str] = None, archetype: Optional[str] = None,
+    untranslated_only: bool = False,
 ) -> str:
     """Sammlung als lesbarer Text -- ein Druck (Eintrag) je Zeile, gruppiert
     nach Kartenklasse. Beruecksichtigt dieselben Filter wie die Sammlungs-
     Ansicht; ohne Filter ist es die gesamte Sammlung."""
-    rows = list_collection(db_path, text, category, attribute, archetype)
-    note = _export_filter_note(text, category, attribute, archetype)
+    rows = list_collection(
+        db_path, text, category, attribute, archetype,
+        untranslated_only=untranslated_only,
+    )
+    note = _export_filter_note(
+        text, category, attribute, archetype, untranslated_only
+    )
     total = sum(r["quantity"] for r in rows)
     unique = len({r["card_id"] for r in rows})
     out = [
@@ -2100,12 +2109,16 @@ def export_collection_text(
 def export_collection_markdown(
     db_path: str, text: Optional[str] = None, category: Optional[str] = None,
     attribute: Optional[str] = None, archetype: Optional[str] = None,
+    untranslated_only: bool = False,
 ) -> str:
     """Sammlung als KI-tauglicher Markdown-Block: je Karte ein Eintrag mit
     Typ, Attribut und vollem Effekttext (DE bevorzugt) plus Gesamtmenge --
     damit ein KI-System Decks aus dem Bestand vorschlagen kann, ohne Karten
     nachzuschlagen. Gleiche Filter wie die Sammlungs-Ansicht."""
-    rows = list_collection(db_path, text, category, attribute, archetype)
+    rows = list_collection(
+        db_path, text, category, attribute, archetype,
+        untranslated_only=untranslated_only,
+    )
     qty: dict[int, int] = {}
     order: list[int] = []
     for r in rows:
@@ -2114,7 +2127,9 @@ def export_collection_markdown(
             qty[r["card_id"]] = 0
         qty[r["card_id"]] += r["quantity"]
     details = _card_details(db_path, order)
-    note = _export_filter_note(text, category, attribute, archetype)
+    note = _export_filter_note(
+        text, category, attribute, archetype, untranslated_only
+    )
     lines = [
         "# Yu-Gi-Oh!-Sammlung" + (f" — {note}" if note else ""),
         "",
