@@ -163,6 +163,73 @@ class _DbTask(QRunnable):
             pass
 
 
+def _scale_pixmap(pix: QPixmap, w: int, h: int) -> QPixmap:
+    """Pixmap auf w×h einpassen (Seitenverhaeltnis erhalten, glatt)."""
+    return pix.scaled(
+        w, h,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
+def _lookup_card_pixmap(card_id: int, w: int, h: int, prefix: str):
+    """Skaliertes Kartenbild aus dem Prozess-Cache oder der lokalen Datei
+    (dann skaliert + gecacht), sonst None -> der Aufrufer laedt asynchron via
+    _ImageLoader nach. Eine Quelle fuer die „Bilder nie hotlinken"-Regel: es
+    wird nur gelesen, was cache_image() bereits heruntergeladen hat. 'prefix'
+    trennt die Cache-Eintraege je Darstellungsgroesse ('card'/'detail'/'hover')."""
+    key = f"{prefix}:{card_id}"
+    cached = QPixmapCache.find(key)
+    if cached is not None and not cached.isNull():
+        return cached
+    path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
+    if os.path.exists(path):
+        pix = QPixmap(path)
+        if not pix.isNull():
+            pix = _scale_pixmap(pix, w, h)
+            QPixmapCache.insert(key, pix)
+            return pix
+    return None
+
+
+class _CardImageView:
+    """Mixin fuer Karten-Panels mit grossem Standbild (DetailPanel,
+    CardDetailDialog). Erwartet self.image (QLabel) und self.current_id;
+    Unterklassen setzen IMG_W/IMG_H und _CACHE_PREFIX. So teilen sich beide
+    das Cache-/Disk-/Async-Laden ueber den gemeinsamen Bildcache."""
+
+    IMG_W, IMG_H = 220, 320
+    _CACHE_PREFIX = "card"
+
+    def _init_card_image(self) -> None:
+        """Im __init__ der Unterklasse aufrufen (richtet die Lade-Signale ein)."""
+        self._img_signals = _ImageSignals()
+        self._img_signals.loaded.connect(self._on_image_loaded)
+        self._img_signals.failed.connect(self._on_image_failed)
+
+    def _load_image(self, card_id: int) -> None:
+        pix = _lookup_card_pixmap(
+            card_id, self.IMG_W, self.IMG_H, self._CACHE_PREFIX
+        )
+        if pix is not None:
+            self.image.setPixmap(pix)
+            return
+        self.image.setText("Lade …")
+        QThreadPool.globalInstance().start(
+            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
+        )
+
+    def _on_image_loaded(self, card_id: int, img: QImage) -> None:
+        pix = _scale_pixmap(QPixmap.fromImage(img), self.IMG_W, self.IMG_H)
+        QPixmapCache.insert(f"{self._CACHE_PREFIX}:{card_id}", pix)
+        if card_id == self.current_id:
+            self.image.setPixmap(pix)
+
+    def _on_image_failed(self, card_id: int) -> None:
+        if card_id == self.current_id:
+            self.image.setText("(Bild offline nicht verfügbar)")
+
+
 class _HoverCardPreview(QObject):
     """Schwebende Kartenbild-Vorschau fuer Item-Views (QListWidget/
     QTableWidget). Faehrt die Maus ueber eine Zeile mit zugeordneter Karte,
@@ -221,19 +288,10 @@ class _HoverCardPreview(QObject):
         if cid is None:
             self._hide()
             return
-        key = f"hover:{cid}"
-        pix = QPixmapCache.find(key)
-        if pix is not None and not pix.isNull():
+        pix = _lookup_card_pixmap(cid, self.PREVIEW_W, self.PREVIEW_H, "hover")
+        if pix is not None:
             self._show_pixmap(pix)
             return
-        path = os.path.join(ydb.IMAGE_DIR, f"{cid}.jpg")
-        if os.path.exists(path):
-            pix = QPixmap(path)
-            if not pix.isNull():
-                pix = self._scaled(pix)
-                QPixmapCache.insert(key, pix)
-                self._show_pixmap(pix)
-                return
         # Noch nicht lokal -> Platzhalter zeigen, im Hintergrund nachladen.
         self._popup.setPixmap(QPixmap())
         self._popup.setText("Lade …")
@@ -252,7 +310,7 @@ class _HoverCardPreview(QObject):
         self._popup.show()
 
     def _on_loaded(self, card_id: int, img: QImage) -> None:
-        pix = self._scaled(QPixmap.fromImage(img))
+        pix = _scale_pixmap(QPixmap.fromImage(img), self.PREVIEW_W, self.PREVIEW_H)
         QPixmapCache.insert(f"hover:{card_id}", pix)
         if card_id == self._current and self._popup.isVisible():
             self._show_pixmap(pix)
@@ -275,14 +333,6 @@ class _HoverCardPreview(QObject):
             x = pt.x() - w - 24            # nach links kippen, wenn rechts kein Platz
         y = max(geo.top(), min(pt.y() - h // 2, geo.bottom() - h))
         self._popup.move(x, y)
-
-    @classmethod
-    def _scaled(cls, pix: QPixmap) -> QPixmap:
-        return pix.scaled(
-            cls.PREVIEW_W, cls.PREVIEW_H,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -653,14 +703,12 @@ def edit_card_translation(repo: "CardRepository", card_id: int, parent) -> bool:
     return True
 
 
-class DetailPanel(QWidget):
+class DetailPanel(_CardImageView, QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
         self.repo = repo
         self.current_id: int | None = None
-        self._img_signals = _ImageSignals()
-        self._img_signals.loaded.connect(self._on_image_loaded)
-        self._img_signals.failed.connect(self._on_image_failed)
+        self._init_card_image()
 
         layout = QVBoxLayout(self)
 
@@ -784,45 +832,6 @@ class DetailPanel(QWidget):
                 text += "  ⚠"
         self.owned.setText(text)
 
-    @staticmethod
-    def _scaled(pixmap: QPixmap) -> QPixmap:
-        return pixmap.scaled(
-            220, 320,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-    def _load_image(self, card_id: int) -> None:
-        # Bereits skalierte Pixmaps im Prozess-Cache halten -- erneutes Anwählen
-        # einer Karte erspart so das volle JPEG-Dekodieren und Skalieren.
-        key = f"card:{card_id}"
-        cached = QPixmapCache.find(key)
-        if cached is not None and not cached.isNull():
-            self.image.setPixmap(cached)
-            return
-        path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
-        if os.path.exists(path):
-            pix = self._scaled(QPixmap(path))
-            QPixmapCache.insert(key, pix)
-            self.image.setPixmap(pix)
-            return
-        self.image.setText("Lade …")
-        QThreadPool.globalInstance().start(
-            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
-        )
-
-    def _on_image_loaded(self, card_id: int, img: QImage) -> None:
-        pix = self._scaled(QPixmap.fromImage(img))
-        QPixmapCache.insert(f"card:{card_id}", pix)
-        if card_id != self.current_id:
-            return
-        self.image.setPixmap(pix)
-
-    def _on_image_failed(self, card_id: int) -> None:
-        if card_id != self.current_id:
-            return
-        self.image.setText("(Bild offline nicht verfügbar)")
-
     def _add_to_collection(self) -> None:
         if self.current_id is None:
             return
@@ -830,7 +839,7 @@ class DetailPanel(QWidget):
         self._update_owned(self.current_id)
 
 
-class CardDetailDialog(QDialog):
+class CardDetailDialog(_CardImageView, QDialog):
     """Read-only Detail-Pop-up einer Karte (Bild, deutsche Infos, Kartentext)
     -- geoeffnet per Doppelklick im Sammlung-Tab. Bietet zusaetzlich den
     „✎ DE"-Button zum Uebersetzung-Bearbeiten; nach dem Speichern meldet
@@ -840,16 +849,14 @@ class CardDetailDialog(QDialog):
 
     translation_changed = Signal()
     IMG_W, IMG_H = 300, 438
+    _CACHE_PREFIX = "detail"
 
     def __init__(self, repo: "CardRepository", parent=None):
         super().__init__(parent)
         self.repo = repo
         self.current_id: int | None = None
         self.resize(360, 660)
-
-        self._img_signals = _ImageSignals()
-        self._img_signals.loaded.connect(self._on_image_loaded)
-        self._img_signals.failed.connect(self._on_image_failed)
+        self._init_card_image()
 
         layout = QVBoxLayout(self)
 
@@ -901,41 +908,6 @@ class CardDetailDialog(QDialog):
         self.stats.setText(_format_card_stats(card))
         self.text.setPlainText(card["desc_de"] or card["description"] or "")
         self._load_image(card_id)
-
-    @classmethod
-    def _scaled(cls, pixmap: QPixmap) -> QPixmap:
-        return pixmap.scaled(
-            cls.IMG_W, cls.IMG_H,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-    def _load_image(self, card_id: int) -> None:
-        key = f"detail:{card_id}"
-        cached = QPixmapCache.find(key)
-        if cached is not None and not cached.isNull():
-            self.image.setPixmap(cached)
-            return
-        path = os.path.join(ydb.IMAGE_DIR, f"{card_id}.jpg")
-        if os.path.exists(path):
-            pix = self._scaled(QPixmap(path))
-            QPixmapCache.insert(key, pix)
-            self.image.setPixmap(pix)
-            return
-        self.image.setText("Lade …")
-        QThreadPool.globalInstance().start(
-            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
-        )
-
-    def _on_image_loaded(self, card_id: int, img: QImage) -> None:
-        pix = self._scaled(QPixmap.fromImage(img))
-        QPixmapCache.insert(f"detail:{card_id}", pix)
-        if card_id == self.current_id:
-            self.image.setPixmap(pix)
-
-    def _on_image_failed(self, card_id: int) -> None:
-        if card_id == self.current_id:
-            self.image.setText("(Bild offline nicht verfügbar)")
 
     def _edit_translation(self) -> None:
         if self.current_id is None:
