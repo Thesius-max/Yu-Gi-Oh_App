@@ -723,13 +723,17 @@ class CollectionView(QWidget):
         filters = QHBoxLayout()
         self.filter_text = QLineEdit()
         self.filter_text.setPlaceholderText("Name filtern …")
-        self.filter_text.textChanged.connect(self.refresh)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(250)
+        self._filter_timer.timeout.connect(self._apply_filters)
+        self.filter_text.textChanged.connect(self._filter_timer.start)
         self.filter_cat = QComboBox()
         self.filter_attr = QComboBox()
         self.filter_arch = QComboBox()
         for cb in (self.filter_cat, self.filter_attr, self.filter_arch):
             cb.addItem("(alle)", None)
-            cb.currentIndexChanged.connect(self.refresh)
+            cb.currentIndexChanged.connect(self._apply_filters)
         for cat in _CATEGORY_ORDER:
             self.filter_cat.addItem(_CATEGORY_DE[cat], cat)
         filters.addWidget(self.filter_text, stretch=1)
@@ -744,7 +748,7 @@ class CollectionView(QWidget):
             "Nur Karten ohne deutsche Übersetzung zeigen (Anzeige fällt dort "
             "auf den englischen Namen zurück)."
         )
-        self.filter_untranslated.toggled.connect(self.refresh)
+        self.filter_untranslated.toggled.connect(self._apply_filters)
         filters.addWidget(self.filter_untranslated)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
@@ -783,12 +787,21 @@ class CollectionView(QWidget):
             cb.blockSignals(False)
 
     def refresh(self) -> None:
+        """Voller Refresh: Filter-Dropdowns neu laden + Daten aktualisieren.
+        Wird nach Sammlung-Mutationen (Hinzufuegen/Entfernen) aufgerufen."""
         if not self.repo.exists():
             self.table.clearSpans()
             self.table.setRowCount(0)
             self.summary.setText("Keine Datenbank vorhanden.")
             return
         self._reload_filter_values()
+        self._apply_filters()
+
+    def _apply_filters(self) -> None:
+        """Nur Daten neu laden und Tabelle befuellen -- ohne Filter-Dropdowns
+        neu abzufragen. Wird bei jeder Filter-Aenderung aufgerufen."""
+        if not self.repo.exists():
+            return
         rows = ydb.list_collection(
             self.repo.db_path,
             text=self.filter_text.text(),
@@ -801,18 +814,21 @@ class CollectionView(QWidget):
         buckets: dict[str, list] = {c: [] for c in _CATEGORY_ORDER}
         for row in rows:
             buckets[ydb.card_category(row["type"])].append(row)
+        self.table.setUpdatesEnabled(False)
         self.table.clearSpans()
         self.table.setRowCount(0)
-        for cat in _CATEGORY_ORDER:
-            group = buckets[cat]
-            if not group:
-                continue
-            # Gesamtmenge der Karten zählen (nicht Einträge), wie im Deck.
-            self._add_header_row(
-                _CATEGORY_DE[cat], sum(row["quantity"] for row in group)
-            )
-            for row in group:
-                self._add_data_row(row)
+        try:
+            for cat in _CATEGORY_ORDER:
+                group = buckets[cat]
+                if not group:
+                    continue
+                self._add_header_row(
+                    _CATEGORY_DE[cat], sum(row["quantity"] for row in group)
+                )
+                for row in group:
+                    self._add_data_row(row)
+        finally:
+            self.table.setUpdatesEnabled(True)
         self._update_summary(rows)
 
     def _add_header_row(self, label: str, count: int) -> None:
@@ -932,12 +948,13 @@ class CollectionView(QWidget):
         self.summary.setText(f"Sammlung exportiert nach {path}")
 
     def _update_summary(self, filtered_rows=None) -> None:
-        entries, unique, total = ydb.collection_stats(self.repo.db_path)
+        entries, unique, total, untranslated = ydb.collection_summary_stats(
+            self.repo.db_path
+        )
         text = (
             f"{entries} Einträge  ·  {unique} verschiedene Karten  ·  "
             f"{total} Karten gesamt"
         )
-        untranslated = ydb.collection_untranslated_count(self.repo.db_path)
         if untranslated:
             text += f"  ·  {untranslated} ohne deutsche Übersetzung"
         if filtered_rows is not None and self._filters_active():
