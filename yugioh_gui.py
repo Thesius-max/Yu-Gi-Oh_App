@@ -1271,6 +1271,9 @@ class ZonePanel(QGroupBox):
         v.addWidget(self.list)
         # Schwebende Kartenbild-Vorschau beim Ueberfahren einer Karte.
         self._hover = _HoverCardPreview(self.list, self._hover_card_id)
+        # Doppelklick auf eine Karte -> read-only Detail-Pop-up (geteilt ueber
+        # die DeckView, analog zum Sammlung-Tab).
+        self.list.itemDoubleClicked.connect(self._on_double_click)
 
         add_btn = QPushButton("+ Karte hinzuf\u00fcgen")
         add_btn.clicked.connect(lambda: owner.add_card_dialog(self.zone))
@@ -1304,6 +1307,13 @@ class ZonePanel(QGroupBox):
         Gruppen-Kopfzeilen/Leerraum -- speist die Hover-Bildvorschau."""
         item = self.list.itemAt(pos)
         return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _on_double_click(self, item) -> None:
+        """Detail-Pop-up der Karte oeffnen; Gruppen-Kopfzeilen (ohne card_id)
+        ignorieren."""
+        card_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if card_id is not None:
+            self.owner.open_card_detail(card_id)
 
     def populate(self, rows, shortages: dict[int, int] | None = None) -> int:
         self.list.clear()
@@ -1575,6 +1585,9 @@ class DeckView(QWidget):
         # Wird von MainWindow gesetzt: callback(card_id) -- Karte im
         # DetailPanel des Suche-Tabs zeigen (fuer Vorschlaege).
         self.open_card_callback = None
+        # Read-only Detail-Pop-up (Doppelklick in einer Zone), lazy angelegt
+        # und ueber alle drei Zonen wiederverwendet.
+        self._detail_dialog: CardDetailDialog | None = None
 
         layout = QVBoxLayout(self)
 
@@ -1848,6 +1861,18 @@ class DeckView(QWidget):
         self.status.setText(f"Deck exportiert nach {path}")
 
     # -- Anzeige ------------------------------------------------------------
+
+    def open_card_detail(self, card_id: int) -> None:
+        """Read-only Detail-Pop-up einer Karte (Doppelklick in einer Zone);
+        eine je DeckView wiederverwendete Instanz, refresht nach DE-Bearbeitung
+        die Zonenlisten."""
+        if self._detail_dialog is None:
+            self._detail_dialog = CardDetailDialog(self.repo, self)
+            self._detail_dialog.translation_changed.connect(self.refresh)
+        self._detail_dialog.load(card_id)
+        self._detail_dialog.show()
+        self._detail_dialog.raise_()
+        self._detail_dialog.activateWindow()
 
     def refresh(self) -> None:
         if self.deck_id is None:
