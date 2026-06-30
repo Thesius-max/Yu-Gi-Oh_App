@@ -391,6 +391,14 @@ def ensure_schema(db_path: str = DEFAULT_DB) -> None:
         conn.commit()
         _migrate(conn)
         conn.commit()
+        # Ausdrucks-Index fuer die Anzeige-Namens-Sortierung (Browse-Leersuche
+        # sortiert ueber 14k+ Karten nach COALESCE(name_de, name)). Bewusst
+        # NACH _migrate -- auf alten DBs existiert name_de erst dann.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cards_disp_name "
+            "ON cards(COALESCE(name_de, name))"
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
