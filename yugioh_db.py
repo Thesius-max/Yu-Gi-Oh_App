@@ -2286,6 +2286,63 @@ def deck_main_cards(db_path: str, deck_id: int) -> list[dict]:
     ]
 
 
+def _deck_zone_cards(conn: sqlite3.Connection, deck_id: int) -> dict[int, dict]:
+    """{card_id: {'name', 'copies'}} fuer Main+Extra eines Decks (Kopien je
+    Karte zusammengezaehlt) -- Basis fuer den Korpus-Vergleich."""
+    rows = conn.execute(
+        """SELECT dc.card_id, COALESCE(c.name_de, c.name) AS name,
+                  SUM(dc.quantity) AS copies
+           FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+           WHERE dc.deck_id = ? AND dc.zone IN ('main', 'extra')
+           GROUP BY dc.card_id""",
+        (deck_id,),
+    ).fetchall()
+    return {
+        r["card_id"]: {"name": r["name"], "copies": int(r["copies"])}
+        for r in rows
+    }
+
+
+def deck_corpus_diff(db_path: str, deck_id: int, ref_deck_id: int) -> dict:
+    """Vergleicht das eigene Deck kopiengenau mit einer Referenz-/Korpus-Liste
+    (jeweils Main+Extra, wie combo_coverage/corpus_edges; Side bleibt aussen
+    vor). Rueckgabe:
+      {'ref_name', 'my_total', 'ref_total', 'ref_cards', 'shared_cards',
+       'missing': [{card_id, name, mine, theirs, diff}],  # Referenz hat mehr
+       'extra':   [{card_id, name, mine, theirs, diff}]}  # du hast mehr
+    'missing'/'extra' nach Differenz absteigend, dann Name."""
+    with _conn(db_path) as conn:
+        ref = conn.execute(
+            "SELECT name FROM decks WHERE deck_id = ?", (ref_deck_id,)
+        ).fetchone()
+        if ref is None:
+            raise ValueError(f"Referenz-Deck {ref_deck_id} nicht gefunden.")
+        mine = _deck_zone_cards(conn, deck_id)
+        theirs = _deck_zone_cards(conn, ref_deck_id)
+    missing, extra = [], []
+    for cid in set(mine) | set(theirs):
+        m = mine.get(cid, {}).get("copies", 0)
+        t = theirs.get(cid, {}).get("copies", 0)
+        name = (theirs.get(cid) or mine.get(cid))["name"]
+        if t > m:
+            missing.append({"card_id": cid, "name": name,
+                            "mine": m, "theirs": t, "diff": t - m})
+        elif m > t:
+            extra.append({"card_id": cid, "name": name,
+                          "mine": m, "theirs": t, "diff": m - t})
+    missing.sort(key=lambda x: (-x["diff"], x["name"]))
+    extra.sort(key=lambda x: (-x["diff"], x["name"]))
+    return {
+        "ref_name": ref["name"],
+        "my_total": sum(c["copies"] for c in mine.values()),
+        "ref_total": sum(c["copies"] for c in theirs.values()),
+        "ref_cards": len(theirs),
+        "shared_cards": len(set(mine) & set(theirs)),
+        "missing": missing,
+        "extra": extra,
+    }
+
+
 def draw_sample_hand(
     db_path: str, deck_id: int, hand_size: int = 5, rng=None
 ) -> list[dict]:

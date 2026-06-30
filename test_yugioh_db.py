@@ -359,6 +359,35 @@ class DbTests(unittest.TestCase):
         self.assertEqual(cards[self.main_id]["copies"], 3)
         self.assertIn("starter", cards[self.main_id]["roles"])
 
+    def test_deck_corpus_diff(self):
+        # Eigenes Deck vs. Referenz-Liste, kopiengenau (Main+Extra).
+        mine = ydb.create_deck(self.db, "Mein")
+        ydb.add_card_to_deck(self.db, mine, self.main_id, zone="main", count=3)
+        ydb.add_card_to_deck(self.db, mine, self.main_id2, zone="main", count=1)
+        ydb.add_card_to_deck(self.db, mine, self.extra_id, zone="extra", count=1)
+        ref = ydb.create_deck(self.db, "Ref")
+        ydb.add_card_to_deck(self.db, ref, self.main_id, zone="main", count=1)
+        ydb.add_card_to_deck(self.db, ref, self.extra_id, zone="extra", count=1)
+        ydb.add_card_to_deck(self.db, ref, self.unowned_id, zone="main", count=2)
+
+        d = ydb.deck_corpus_diff(self.db, mine, ref)
+        self.assertEqual(d["ref_name"], "Ref")
+        self.assertEqual(d["my_total"], 5)
+        self.assertEqual(d["ref_total"], 4)
+        self.assertEqual(d["ref_cards"], 3)
+        self.assertEqual(d["shared_cards"], 2)  # main_id + extra_id in beiden
+        # Referenz hat mehr: nur unowned_id (+2).
+        self.assertEqual([(m["card_id"], m["diff"]) for m in d["missing"]],
+                         [(self.unowned_id, 2)])
+        # Du hast mehr: main_id (+2) vor main_id2 (+1), nach Differenz sortiert.
+        self.assertEqual([(e["card_id"], e["diff"]) for e in d["extra"]],
+                         [(self.main_id, 2), (self.main_id2, 1)])
+
+    def test_deck_corpus_diff_unknown_ref_raises(self):
+        mine = ydb.create_deck(self.db, "Mein")
+        with self.assertRaises(ValueError):
+            ydb.deck_corpus_diff(self.db, mine, 999999)
+
     # -- Kombo-Varianten (Branches) ---------------------------------------
 
     def test_variant_link_and_listing(self):

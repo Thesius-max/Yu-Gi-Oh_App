@@ -1598,6 +1598,87 @@ class ReferenceDeckDialog(QDialog):
             self._reload()
 
 
+def _format_corpus_diff(d: dict) -> str:
+    """Korpus-Vergleich als lesbarer Text (gemeinsam von Dialog/Tests nutzbar)."""
+    lines = [
+        f"Referenz: {d['ref_name']}",
+        f"Übereinstimmung: {d['shared_cards']}/{d['ref_cards']} Karten der "
+        f"Referenzliste (Main+Extra)",
+        f"Deine Karten: {d['my_total']}  ·  Referenz: {d['ref_total']}",
+        "",
+    ]
+    if d["missing"]:
+        lines.append(f"Fehlt dir ({len(d['missing'])}):")
+        lines += [
+            f"  +{m['diff']}  {m['name']}   "
+            f"(du {m['mine']} / Referenz {m['theirs']})"
+            for m in d["missing"]
+        ]
+    else:
+        lines.append("Fehlt dir: nichts — alle Referenzkarten sind abgedeckt.")
+    lines.append("")
+    if d["extra"]:
+        lines.append(f"Du hast extra ({len(d['extra'])}):")
+        lines += [
+            f"  +{e['diff']}  {e['name']}   "
+            f"(du {e['mine']} / Referenz {e['theirs']})"
+            for e in d["extra"]
+        ]
+    else:
+        lines.append("Du hast extra: nichts.")
+    return "\n".join(lines)
+
+
+class DeckCorpusDiffDialog(QDialog):
+    """Vergleicht das aktuelle Deck (Main+Extra, kopiengenau) mit einer
+    waehlbaren Korpus-/Referenz-Liste: was fehlt dir, was hast du extra.
+    Reine Anzeige; aendert nichts am Deck."""
+
+    def __init__(self, repo: "CardRepository", deck_id: int, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.deck_id = deck_id
+        self.setWindowTitle("Deck-Vergleich mit Korpus-Liste")
+        self.resize(560, 620)
+
+        layout = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Referenz-Liste:"))
+        self.ref_cb = QComboBox()
+        for d in ydb.list_reference_decks(repo.db_path):
+            label = d["name"]
+            if d["format_date"]:
+                label += f" ({d['format_date']})"
+            self.ref_cb.addItem(label, d["deck_id"])
+        self.ref_cb.currentIndexChanged.connect(self._update)
+        row.addWidget(self.ref_cb, stretch=1)
+        layout.addLayout(row)
+
+        self.report = QTextBrowser()
+        layout.addWidget(self.report, stretch=1)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        close_btn = QPushButton("Schließen")
+        close_btn.clicked.connect(self.accept)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+        self._update()
+
+    def _update(self) -> None:
+        ref_id = self.ref_cb.currentData()
+        if ref_id is None:
+            self.report.setPlainText("")
+            return
+        try:
+            d = ydb.deck_corpus_diff(self.repo.db_path, self.deck_id, ref_id)
+        except ValueError as exc:
+            self.report.setPlainText(str(exc))
+            return
+        self.report.setPlainText(_format_corpus_diff(d))
+
+
 class DeckView(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -1631,6 +1712,12 @@ class DeckView(QWidget):
             "Kartenvorschläge verwalten"
         )
         corpus_btn.clicked.connect(self._open_corpus)
+        diff_btn = QPushButton("Vergleich…")
+        diff_btn.setToolTip(
+            "Aktuelles Deck mit einer Korpus-/Meta-Liste vergleichen "
+            "(was fehlt dir, was hast du extra)"
+        )
+        diff_btn.clicked.connect(self._open_corpus_diff)
         top.addWidget(QLabel("Deck:"))
         top.addWidget(self.deck_cb, stretch=1)
         top.addWidget(new_btn)
@@ -1638,6 +1725,7 @@ class DeckView(QWidget):
         top.addWidget(import_btn)
         top.addWidget(export_btn)
         top.addWidget(corpus_btn)
+        top.addWidget(diff_btn)
         layout.addLayout(top)
 
         zones_widget = QWidget()
@@ -1805,6 +1893,20 @@ class DeckView(QWidget):
         if not self.repo.exists():
             return
         ReferenceDeckDialog(self.repo, self).exec()
+
+    def _open_corpus_diff(self) -> None:
+        """Aktuelles Deck gegen eine Korpus-/Referenz-Liste vergleichen."""
+        if not self.repo.exists() or self.deck_id is None:
+            QMessageBox.information(self, "Vergleich", "Kein Deck ausgewählt.")
+            return
+        if not ydb.list_reference_decks(self.repo.db_path):
+            QMessageBox.information(
+                self, "Vergleich",
+                "Keine Korpus-/Referenz-Listen vorhanden. Importiere welche "
+                "über den „Korpus…“-Knopf.",
+            )
+            return
+        DeckCorpusDiffDialog(self.repo, self.deck_id, self).exec()
 
     def _delete_deck(self) -> None:
         if self.deck_id is None:
