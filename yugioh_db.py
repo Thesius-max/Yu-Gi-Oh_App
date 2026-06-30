@@ -2297,6 +2297,30 @@ def deck_main_cards(db_path: str, deck_id: int) -> list[dict]:
     ]
 
 
+def deck_play_lists(db_path: str, deck_id: int) -> dict:
+    """Karten fuer den Spielfeld-Test: Main- und Extra-Deck je als nach Kopien
+    expandierte card_id-Liste (jede Kopie = ein ziehbares Exemplar) plus
+    Anzeigenamen. Side bleibt aussen vor (es wird aus dem Main gezogen, das
+    Extra ist sein eigener Stapel). Rueckgabe:
+      {'main': [card_id, ...], 'extra': [card_id, ...], 'names': {id: name}}."""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT dc.card_id, dc.zone, dc.quantity,
+                      COALESCE(c.name_de, c.name) AS name
+               FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
+               WHERE dc.deck_id = ? AND dc.zone IN ('main', 'extra')""",
+            (deck_id,),
+        ).fetchall()
+    main: list[int] = []
+    extra: list[int] = []
+    names: dict[int, str] = {}
+    for r in rows:
+        names[r["card_id"]] = r["name"]
+        target = main if r["zone"] == "main" else extra
+        target.extend([r["card_id"]] * int(r["quantity"]))
+    return {"main": main, "extra": extra, "names": names}
+
+
 def _deck_zone_cards(conn: sqlite3.Connection, deck_id: int) -> dict[int, dict]:
     """{card_id: {'name', 'copies'}} fuer Main+Extra eines Decks (Kopien je
     Karte zusammengezaehlt) -- Basis fuer den Korpus-Vergleich."""

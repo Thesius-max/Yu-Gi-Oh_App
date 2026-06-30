@@ -25,26 +25,27 @@ from __future__ import annotations
 
 import datetime
 import os
+import random
 import shutil
 import sys
 
 from PySide6.QtCore import (
-    Qt, QEvent, QMarginsF, QObject, QPoint, QRunnable, QSettings, QThreadPool,
-    QTimer, QUrl, Signal,
+    Qt, QEvent, QMarginsF, QObject, QPoint, QPointF, QRunnable, QSettings,
+    QThreadPool, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QFont, QGuiApplication, QImage, QPageLayout,
-    QPageSize, QPalette, QPdfWriter, QPixmap, QPixmapCache, QTextCursor,
-    QTextDocument,
+    QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QImage,
+    QPageLayout, QPageSize, QPainter, QPalette, QPdfWriter, QPen, QPixmap,
+    QPixmapCache, QTextCursor, QTextDocument, QTransform,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QProgressDialog, QPushButton, QSpinBox, QSplitter, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit,
-    QVBoxLayout, QWidget,
+    QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QInputDialog, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QProgressDialog, QPushButton, QScrollArea, QSpinBox, QSplitter,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget,
+    QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
 import yugioh_db as ydb
@@ -3571,6 +3572,562 @@ Hintergrund, warum die App sich so verhält:
 ]
 
 
+# ---------------------------------------------------------------------------
+# Spielfeld-Test (Solitaire-Goldfishing) — eigener Tab
+# ---------------------------------------------------------------------------
+
+_CARD_W, _CARD_H = 60, 86      # Brettkarten-Groesse (aufrecht)
+_ZONE_W = _ZONE_H = 94         # Zelle: fasst Karte aufrecht UND um 90° gedreht
+
+
+def _card_back_pixmap(w: int, h: int) -> QPixmap:
+    """Programmatisch gezeichnete Kartenrueckseite (kein Asset), gecacht."""
+    key = f"cardback:{w}x{h}"
+    pm = QPixmapCache.find(key)
+    if pm is not None and not pm.isNull():
+        return pm
+    pm = QPixmap(w, h)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QBrush(QColor("#3a2f4d")))
+    p.setPen(QPen(QColor("#d4af37"), 2))
+    p.drawRoundedRect(1, 1, w - 2, h - 2, 6, 6)
+    p.setBrush(QBrush(QColor("#241a33")))
+    cx, cy, d = w / 2, h / 2, min(w, h) * 0.26
+    p.drawPolygon([QPointF(cx, cy - d), QPointF(cx + d, cy),
+                   QPointF(cx, cy + d), QPointF(cx - d, cy)])
+    p.end()
+    QPixmapCache.insert(key, pm)
+    return pm
+
+
+def _placeholder_pixmap(name: str, w: int, h: int) -> QPixmap:
+    """Grauer Platzhalter mit Kartennamen, solange das Bild noch laedt/fehlt."""
+    pm = QPixmap(w, h)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QBrush(QColor("#2c2340")))
+    p.setPen(QPen(QColor("#6f6786"), 1))
+    p.drawRoundedRect(0, 0, w - 1, h - 1, 5, 5)
+    p.setPen(QColor("#cfc6e0"))
+    f = p.font(); f.setPointSize(6); p.setFont(f)
+    p.drawText(
+        pm.rect().adjusted(3, 3, -3, -3),
+        int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
+        (name or "")[:40],
+    )
+    p.end()
+    return pm
+
+
+class _CardInst:
+    """Eine Karte auf dem Brett/Hand: Identitaet + Zustand (offen/verdeckt,
+    ATK/DEF). Jede Kopie ist ein eigenes Exemplar."""
+    __slots__ = ("card_id", "name", "face_down", "defense")
+
+    def __init__(self, card_id: int, name: str,
+                 face_down: bool = False, defense: bool = False):
+        self.card_id = card_id
+        self.name = name
+        self.face_down = face_down
+        self.defense = defense
+
+
+class _BoardCard(QLabel):
+    """Anzeige einer Karte auf dem Brett/Hand. Linksklick = aufnehmen/anwaehlen,
+    Rechtsklick = Kontextmenue. Das fertige Pixmap (offen/verdeckt, ggf. gedreht)
+    liefert die View."""
+    clicked = Signal(object)            # _CardInst
+    context = Signal(object, QPoint)    # _CardInst, globale Position
+
+    def __init__(self, inst: _CardInst, pixmap: QPixmap,
+                 held: bool = False, parent=None):
+        super().__init__(parent)
+        self.inst = inst
+        self.setPixmap(pixmap)
+        self.setFixedSize(pixmap.size())
+        self.setToolTip(inst.name)
+        if held:
+            self.setStyleSheet("border: 2px solid #d4af37;")
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.RightButton:
+            self.context.emit(self.inst, e.globalPosition().toPoint())
+        elif e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.inst)
+
+
+class _Zone(QFrame):
+    """Eine Feldzelle (Monster/Zauber/Feld/EMZ) oder ein Stapel
+    (Deck/GY/Verbannt/Extra). Linksklick auf leere Flaeche meldet zone_key."""
+    clicked = Signal(str)
+
+    def __init__(self, zone_key: str, w: int, h: int, parent=None):
+        super().__init__(parent)
+        self.zone_key = zone_key
+        self.setObjectName("BoardZone")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFixedSize(w, h)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(2, 2, 2, 2)
+        self._lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def set_content(self, widget) -> None:
+        while self._lay.count():
+            old = self._lay.takeAt(0).widget()
+            if old is not None:
+                old.setParent(None)
+        if widget is not None:
+            self._lay.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.zone_key)
+        super().mousePressEvent(e)
+
+
+class _PileDialog(QDialog):
+    """Listet die Karten eines Stapels; Auswahl (Doppelklick/Button) wird in
+    self.selected (Zeilenindex) abgelegt. Der Aufrufer kennt die Reihenfolge."""
+
+    def __init__(self, title: str, labels: list[str], parent=None,
+                 action_label: str = "Auf die Hand"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(360, 480)
+        self.selected = -1
+        lay = QVBoxLayout(self)
+        self.listw = QListWidget()
+        for s in labels:
+            QListWidgetItem(s, self.listw)
+        self.listw.itemDoubleClicked.connect(self._take)
+        lay.addWidget(self.listw, stretch=1)
+        row = QHBoxLayout()
+        row.addStretch()
+        take = QPushButton(action_label)
+        take.clicked.connect(self._take)
+        close = QPushButton("Schließen")
+        close.clicked.connect(self.reject)
+        row.addWidget(take)
+        row.addWidget(close)
+        lay.addLayout(row)
+
+    def _take(self, *_args) -> None:
+        if self.listw.currentRow() >= 0:
+            self.selected = self.listw.currentRow()
+            self.accept()
+
+
+class PlayTestView(QWidget):
+    """Solitaire-Spielfeld: ein eigenes Deck laden, Starthand ziehen und Karten
+    frei auslegen (Klick-Aufnehmen + Klick-Ablegen, Rechtsklick fuer Zustaende).
+    Reiner Sandkasten — keine Regeln, kein Gegner, keine Persistenz. Der
+    Spielzustand lebt nur hier in der GUI."""
+
+    _PLACEMENT_LABELS = {"field": "Feld", "e": "EMZ", "m": "Mon", "s": "Z/F"}
+
+    def __init__(self, repo: CardRepository):
+        super().__init__()
+        self.repo = repo
+        self._deck_id: int | None = None
+        self._names: dict[int, str] = {}
+        self._deck: list[int] = []
+        self._extra: list[int] = []
+        self._hand: list[_CardInst] = []
+        self._mzones: list = [None] * 5
+        self._szones: list = [None] * 5
+        self._emz: list = [None, None]
+        self._field = None
+        self._gy: list[_CardInst] = []
+        self._banished: list[_CardInst] = []
+        self._held: _CardInst | None = None
+        self._detail_dialog: CardDetailDialog | None = None
+
+        # Nachladen fehlender Bilder (meist sind sie lokal gecacht).
+        self._loading_imgs: set[int] = set()
+        self._img_signals = _ImageSignals()
+        self._img_signals.loaded.connect(self._on_img_loaded)
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(40)
+        self._render_timer.timeout.connect(self._render)
+
+        outer = QVBoxLayout(self)
+
+        # -- Werkzeugleiste --------------------------------------------------
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Deck:"))
+        self.deck_cb = QComboBox()
+        self.deck_cb.currentIndexChanged.connect(self._on_deck_selected)
+        bar.addWidget(self.deck_cb, stretch=1)
+        self.hand_size_cb = QComboBox()
+        self.hand_size_cb.addItem("5 (First)", 5)
+        self.hand_size_cb.addItem("6 (Second)", 6)
+        bar.addWidget(self.hand_size_cb)
+        for text, slot in (
+            ("Neue Starthand", self.reset),
+            ("Ziehen", self.draw),
+            ("Mischen", self.shuffle),
+            ("Deck durchsuchen…", self._search_deck),
+        ):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            bar.addWidget(b)
+        outer.addLayout(bar)
+
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        outer.addWidget(self.status)
+
+        # -- Feld-Grid -------------------------------------------------------
+        self._zones: dict[str, _Zone] = {}
+        grid = QGridLayout()
+        grid.setSpacing(4)
+
+        def zone(key, r, c, rowspan=1, colspan=1):
+            z = _Zone(key, _ZONE_W, _ZONE_H)
+            z.clicked.connect(self._on_zone_clicked)
+            self._zones[key] = z
+            grid.addWidget(z, r, c, rowspan, colspan)
+
+        # Links: Feldzauber + Extra-Deck. Mitte (Spalten 1-5): EMZ / Monster /
+        # Zauber-Fallen. Rechts: Deck / Friedhof / Verbannt.
+        zone("field", 0, 0)
+        zone("extra", 2, 0)
+        zone("e0", 0, 2)
+        zone("e1", 0, 4)
+        for i in range(5):
+            zone(f"m{i}", 1, 1 + i)
+        for i in range(5):
+            zone(f"s{i}", 2, 1 + i)
+        zone("deck", 0, 6)
+        zone("gy", 1, 6)
+        zone("banished", 2, 6)
+        board = QWidget()
+        board.setLayout(grid)
+        outer.addWidget(board, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # -- Hand ------------------------------------------------------------
+        self.hand_label = QLabel("Hand")
+        outer.addWidget(self.hand_label)
+        self._hand_host = QWidget()
+        self._hand_row = QHBoxLayout(self._hand_host)
+        self._hand_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(_CARD_H + 24)
+        scroll.setWidget(self._hand_host)
+        outer.addWidget(scroll)
+        outer.addStretch()
+
+        self.refresh()
+
+    # -- Deck-Auswahl / Laden ----------------------------------------------
+
+    def refresh(self) -> None:
+        """Deck-Liste aktuell halten (z. B. nach Anlegen/Loeschen von Decks)."""
+        keep = self.deck_cb.currentData()
+        self.deck_cb.blockSignals(True)
+        self.deck_cb.clear()
+        decks = ydb.list_decks(self.repo.db_path) if self.repo.exists() else []
+        for d in decks:
+            self.deck_cb.addItem(d["name"], d["deck_id"])
+        idx = self.deck_cb.findData(keep)
+        if idx < 0 and self.deck_cb.count():
+            idx = 0
+        self.deck_cb.setCurrentIndex(max(idx, 0))
+        self.deck_cb.blockSignals(False)
+        new_id = self.deck_cb.currentData()
+        if new_id != self._deck_id:
+            self._deck_id = new_id
+            self.reset()
+        else:
+            self._render()
+
+    def _on_deck_selected(self, _index: int) -> None:
+        self._deck_id = self.deck_cb.currentData()
+        self.reset()
+
+    def _hand_size(self) -> int:
+        return self.hand_size_cb.currentData() or 5
+
+    def reset(self) -> None:
+        """Feld/Hand leeren, Deck+Extra neu laden, mischen, Starthand ziehen."""
+        self._held = None
+        self._hand = []
+        self._mzones = [None] * 5
+        self._szones = [None] * 5
+        self._emz = [None, None]
+        self._field = None
+        self._gy = []
+        self._banished = []
+        if self._deck_id is not None and self.repo.exists():
+            data = ydb.deck_play_lists(self.repo.db_path, self._deck_id)
+            self._names = data["names"]
+            self._deck = list(data["main"])
+            self._extra = list(data["extra"])
+            random.shuffle(self._deck)
+            for _ in range(self._hand_size()):
+                if self._deck:
+                    self._hand.append(self._mk_inst(self._deck.pop(0)))
+        else:
+            self._names, self._deck, self._extra = {}, [], []
+        self._render()
+
+    def _mk_inst(self, card_id: int) -> _CardInst:
+        return _CardInst(card_id, self._names.get(card_id, str(card_id)))
+
+    # -- Aktionen -----------------------------------------------------------
+
+    def draw(self) -> None:
+        if self._deck:
+            self._hand.append(self._mk_inst(self._deck.pop(0)))
+            self._render()
+
+    def shuffle(self) -> None:
+        random.shuffle(self._deck)
+        self._render()
+
+    def _search_deck(self) -> None:
+        if not self._deck:
+            return
+        pairs = sorted(
+            ((self._names.get(c, str(c)), c) for c in self._deck),
+            key=lambda x: x[0],
+        )
+        dlg = _PileDialog("Deck durchsuchen", [p[0] for p in pairs], self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected >= 0:
+            cid = pairs[dlg.selected][1]
+            self._deck.remove(cid)
+            self._hand.append(self._mk_inst(cid))
+            random.shuffle(self._deck)
+            self._render()
+
+    def _open_pile(self, kind: str) -> None:
+        if kind == "extra":
+            labels = [self._names.get(c, str(c)) for c in self._extra]
+        else:
+            pile = self._gy if kind == "gy" else self._banished
+            labels = [c.name for c in pile]
+        if not labels:
+            return
+        titles = {"extra": "Extra-Deck", "gy": "Friedhof", "banished": "Verbannt"}
+        dlg = _PileDialog(titles[kind], labels, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected >= 0:
+            i = dlg.selected
+            if kind == "extra":
+                self._hand.append(self._mk_inst(self._extra.pop(i)))
+            else:
+                pile = self._gy if kind == "gy" else self._banished
+                self._hand.append(pile.pop(i))
+            self._render()
+
+    # -- Bewegen (Klick-Aufnehmen + Ablegen) -------------------------------
+
+    def _on_card_clicked(self, inst: _CardInst) -> None:
+        if self._held is inst:
+            self._held = None
+        elif inst in self._hand or self._on_field(inst):
+            self._held = inst
+        self._render()
+
+    def _on_zone_clicked(self, zone_key: str) -> None:
+        if zone_key == "deck":
+            self.draw()
+            return
+        if zone_key in ("gy", "banished", "extra"):
+            self._open_pile(zone_key)
+            return
+        if self._held is None:
+            return
+        if zone_key == "field":
+            if self._field is None:
+                self._remove_inst(self._held)
+                self._field = self._held
+                self._held = None
+        else:
+            arr, i = self._slot_ref(zone_key)
+            if arr[i] is None:
+                self._remove_inst(self._held)
+                arr[i] = self._held
+                self._held = None
+        self._render()
+
+    def _slot_ref(self, zone_key: str):
+        arr = {"m": self._mzones, "s": self._szones, "e": self._emz}[zone_key[0]]
+        return arr, int(zone_key[1:])
+
+    def _on_field(self, inst: _CardInst) -> bool:
+        if inst is self._field:
+            return True
+        return any(inst is c for c in (*self._mzones, *self._szones, *self._emz))
+
+    def _remove_inst(self, inst: _CardInst) -> None:
+        """Entfernt ein Exemplar aus Hand/Zonen/GY/Verbannt (per Identitaet)."""
+        if inst in self._hand:
+            self._hand.remove(inst)
+            return
+        for arr in (self._mzones, self._szones, self._emz):
+            for i, c in enumerate(arr):
+                if c is inst:
+                    arr[i] = None
+                    return
+        if inst is self._field:
+            self._field = None
+            return
+        for pile in (self._gy, self._banished):
+            if inst in pile:
+                pile.remove(inst)
+                return
+
+    def _on_card_context(self, inst: _CardInst, pos: QPoint) -> None:
+        menu = QMenu(self)
+        in_hand = inst in self._hand
+        a_face = a_pos = a_hand = None
+        if not in_hand:
+            a_face = menu.addAction("Offen" if inst.face_down else "Verdeckt")
+            a_pos = menu.addAction("ATK" if inst.defense else "DEF")
+            a_hand = menu.addAction("→ Hand")
+        a_gy = menu.addAction("→ Friedhof")
+        a_ban = menu.addAction("→ Verbannt")
+        a_deck = menu.addAction("→ Deck (oben)")
+        menu.addSeparator()
+        a_det = menu.addAction("Details…")
+        chosen = menu.exec(pos)
+        if chosen is None:
+            return
+        if chosen is a_det:
+            self._open_detail(inst.card_id)
+            return
+        if chosen is a_face:
+            inst.face_down = not inst.face_down
+        elif chosen is a_pos:
+            inst.defense = not inst.defense
+        elif chosen is a_hand:
+            self._remove_inst(inst); self._hand.append(inst)
+        elif chosen is a_gy:
+            self._remove_inst(inst); self._gy.append(inst)
+        elif chosen is a_ban:
+            self._remove_inst(inst); self._banished.append(inst)
+        elif chosen is a_deck:
+            self._remove_inst(inst); self._deck.insert(0, inst.card_id)
+        self._render()
+
+    def _open_detail(self, card_id: int) -> None:
+        if self._detail_dialog is None:
+            self._detail_dialog = CardDetailDialog(self.repo, self)
+        self._detail_dialog.load(card_id)
+        self._detail_dialog.show()
+        self._detail_dialog.raise_()
+        self._detail_dialog.activateWindow()
+
+    # -- Bilder -------------------------------------------------------------
+
+    def _pixmap_for(self, inst: _CardInst) -> QPixmap:
+        if inst.face_down:
+            pm = _card_back_pixmap(_CARD_W, _CARD_H)
+        else:
+            pm = _lookup_card_pixmap(inst.card_id, _CARD_W, _CARD_H, "board")
+            if pm is None:
+                self._ensure_image(inst.card_id)
+                pm = _placeholder_pixmap(inst.name, _CARD_W, _CARD_H)
+        if inst.defense:
+            pm = pm.transformed(
+                QTransform().rotate(90), Qt.TransformationMode.SmoothTransformation
+            )
+        return pm
+
+    def _ensure_image(self, card_id: int) -> None:
+        if card_id in self._loading_imgs:
+            return
+        self._loading_imgs.add(card_id)
+        QThreadPool.globalInstance().start(
+            _ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
+        )
+
+    def _on_img_loaded(self, card_id: int, img: QImage) -> None:
+        QPixmapCache.insert(
+            f"board:{card_id}", _scale_pixmap(QPixmap.fromImage(img), _CARD_W, _CARD_H)
+        )
+        self._loading_imgs.discard(card_id)
+        self._render_timer.start()   # gebuendelt neu zeichnen
+
+    # -- Rendern ------------------------------------------------------------
+
+    def _make_card(self, inst: _CardInst) -> _BoardCard:
+        card = _BoardCard(inst, self._pixmap_for(inst), held=(inst is self._held))
+        card.clicked.connect(self._on_card_clicked)
+        card.context.connect(self._on_card_context)
+        return card
+
+    def _zone_placeholder(self, key: str) -> QLabel:
+        lbl = QLabel(self._PLACEMENT_LABELS.get(key[0], ""))
+        lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        lbl.setStyleSheet("color: #5b5273;")
+        return lbl
+
+    def _pile_widget(self, name: str, count: int,
+                     back: bool = False, top: _CardInst = None) -> QWidget:
+        host = QWidget()
+        host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        v = QVBoxLayout(host)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(1)
+        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img = QLabel()
+        img.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        if top is not None:
+            img.setPixmap(self._pixmap_for(top))
+        elif back and count:
+            img.setPixmap(_card_back_pixmap(_CARD_W, _CARD_H))
+        v.addWidget(img, alignment=Qt.AlignmentFlag.AlignCenter)
+        cap = QLabel(f"{name} {count}")
+        cap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        cap.setStyleSheet("color: #cfc6e0; font-size: 9px;")
+        v.addWidget(cap, alignment=Qt.AlignmentFlag.AlignCenter)
+        return host
+
+    def _render(self) -> None:
+        slots = {"field": self._field, "e0": self._emz[0], "e1": self._emz[1]}
+        for i in range(5):
+            slots[f"m{i}"] = self._mzones[i]
+            slots[f"s{i}"] = self._szones[i]
+        for key, inst in slots.items():
+            self._zones[key].set_content(
+                self._make_card(inst) if inst is not None
+                else self._zone_placeholder(key)
+            )
+        self._zones["deck"].set_content(
+            self._pile_widget("Deck", len(self._deck), back=True)
+        )
+        self._zones["extra"].set_content(
+            self._pile_widget("Extra", len(self._extra), back=True)
+        )
+        self._zones["gy"].set_content(
+            self._pile_widget("GY", len(self._gy),
+                              top=self._gy[-1] if self._gy else None)
+        )
+        self._zones["banished"].set_content(
+            self._pile_widget("Bann", len(self._banished),
+                              top=self._banished[-1] if self._banished else None)
+        )
+        # Hand
+        while self._hand_row.count():
+            old = self._hand_row.takeAt(0).widget()
+            if old is not None:
+                old.setParent(None)
+        for inst in self._hand:
+            self._hand_row.addWidget(self._make_card(inst))
+        self.hand_label.setText(f"Hand ({len(self._hand)})")
+        held = "  ·  aufgenommen: " + self._held.name if self._held else ""
+        self.status.setText(
+            f"Deck {len(self._deck)}  ·  Extra {len(self._extra)}  ·  "
+            f"GY {len(self._gy)}  ·  Verbannt {len(self._banished)}{held}"
+        )
+
+
 class HelpView(QWidget):
     """Benutzerhandbuch als eigener Tab: links die Abschnittsliste, rechts der
     gewaehlte Abschnitt als gerenderter Text. Rein statisch (kein Repo-Zugriff),
@@ -3649,6 +4206,7 @@ class MainWindow(QMainWindow):
         self.collection_view = CollectionView(self.repo)
         self.deck_view = DeckView(self.repo)
         self.combo_view = ComboView(self.repo)
+        self.playtest_view = PlayTestView(self.repo)
         # Detailansicht -> aktives Deck bzw. aktive Kombo
         self.detail.add_to_deck_callback = self.deck_view.add_card
         self.detail.add_to_combo_callback = self.combo_view.add_piece
@@ -3661,6 +4219,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(splitter, "Suche")
         self.tabs.addTab(self.collection_view, "Sammlung")
         self.tabs.addTab(self.deck_view, "Deck")
+        self.tabs.addTab(self.playtest_view, "Spielfeld")
         self.tabs.addTab(self.combo_view, "Kombos")
         self.tabs.addTab(HelpView(), "Handbuch")
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -3806,6 +4365,8 @@ class MainWindow(QMainWindow):
             self.collection_view.refresh()
         elif widget is self.deck_view:
             self.deck_view.refresh()
+        elif widget is self.playtest_view:
+            self.playtest_view.refresh()
         elif widget is self.combo_view:
             self.combo_view.refresh()
 
@@ -4240,6 +4801,9 @@ QToolTip {
 #HoverCardPreview {
     background: #241a33; color: #9b90b5;
     border: 1px solid #d4af37; padding: 2px;
+}
+#BoardZone {
+    background: #1f1830; border: 1px solid #3a2f4d; border-radius: 4px;
 }
 """
 

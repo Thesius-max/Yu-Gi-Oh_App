@@ -359,6 +359,20 @@ class DbTests(unittest.TestCase):
         self.assertEqual(cards[self.main_id]["copies"], 3)
         self.assertIn("starter", cards[self.main_id]["roles"])
 
+    def test_deck_play_lists(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=3)
+        ydb.add_card_to_deck(self.db, deck, self.main_id2, zone="main", count=2)
+        ydb.add_card_to_deck(self.db, deck, self.extra_id, zone="extra", count=1)
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="side", count=1)
+        play = ydb.deck_play_lists(self.db, deck)
+        counts = ydb.deck_counts(self.db, deck)
+        self.assertEqual(len(play["main"]), counts["main"])   # Side bleibt aussen vor
+        self.assertEqual(len(play["extra"]), counts["extra"])
+        self.assertEqual(play["main"].count(self.main_id), 3)
+        self.assertEqual(play["extra"], [self.extra_id])
+        self.assertIn(self.main_id, play["names"])
+
     def test_list_combos_text_filter(self):
         # Filter nach Name, Archetyp oder Baustein-Kartenname.
         c_name = ydb.create_combo(self.db, "Resonator-Turbo")
