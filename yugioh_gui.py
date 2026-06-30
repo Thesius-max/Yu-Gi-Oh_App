@@ -3576,8 +3576,8 @@ Hintergrund, warum die App sich so verhält:
 # Spielfeld-Test (Solitaire-Goldfishing) — eigener Tab
 # ---------------------------------------------------------------------------
 
-_CARD_W, _CARD_H = 60, 86      # Brettkarten-Groesse (aufrecht)
-_ZONE_W = _ZONE_H = 94         # Zelle: fasst Karte aufrecht UND um 90° gedreht
+_CARD_W, _CARD_H = 74, 106     # Brettkarten-Groesse (aufrecht)
+_ZONE_W = _ZONE_H = 120        # Zelle: fasst Karte aufrecht UND um 90° gedreht
 
 
 def _card_back_pixmap(w: int, h: int) -> QPixmap:
@@ -3802,19 +3802,21 @@ class PlayTestView(QWidget):
             zone(f"m{i}", 1, 1 + i)
         for i in range(5):
             zone(f"s{i}", 2, 1 + i)
-        zone("deck", 0, 6)
+        # Rechte Spalte von unten nach oben: Deck, Friedhof, Verbannt.
+        zone("banished", 0, 6)
         zone("gy", 1, 6)
-        zone("banished", 2, 6)
+        zone("deck", 2, 6)
         board = QWidget()
         board.setLayout(grid)
         outer.addWidget(board, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # -- Hand ------------------------------------------------------------
         self.hand_label = QLabel("Hand")
+        self.hand_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(self.hand_label)
         self._hand_host = QWidget()
         self._hand_row = QHBoxLayout(self._hand_host)
-        self._hand_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._hand_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFixedHeight(_CARD_H + 24)
