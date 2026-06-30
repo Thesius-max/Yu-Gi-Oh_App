@@ -1388,11 +1388,14 @@ def create_combo(
         return cur.lastrowid
 
 
-def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row]:
+def list_combos(
+    db_path: str, deck_id: Optional[int] = None, text: Optional[str] = None
+) -> list[sqlite3.Row]:
     """Hauptlinien (parent_combo_id IS NULL), optional nach Heimat-Deck
     gefiltert: deck_id=None -> alle, deck_id=0 -> nur ohne Heimat-Deck, sonst
-    das Deck. Varianten haengen an ihrer Hauptlinie (siehe combo_variants) und
-    erscheinen hier bewusst nicht direkt."""
+    das Deck. 'text' filtert zusaetzlich nach Name, Archetyp oder einem
+    Baustein-Kartennamen (de/en). Varianten haengen an ihrer Hauptlinie (siehe
+    combo_variants) und erscheinen hier bewusst nicht direkt."""
     sql = """SELECT cb.combo_id, cb.name, cb.archetype, cb.deck_id,
                     d.name AS deck_name
              FROM combos cb LEFT JOIN decks d ON d.deck_id = cb.deck_id
@@ -1403,6 +1406,14 @@ def list_combos(db_path: str, deck_id: Optional[int] = None) -> list[sqlite3.Row
     elif deck_id is not None:
         sql += " AND cb.deck_id = ?"
         args = (deck_id,)
+    if text and text.strip():
+        like = f"%{text.strip()}%"
+        sql += """ AND (cb.name LIKE ? OR cb.archetype LIKE ?
+                        OR cb.combo_id IN (
+                            SELECT cc.combo_id FROM combo_cards cc
+                            JOIN cards c ON c.id = cc.card_id
+                            WHERE COALESCE(c.name_de, c.name) LIKE ?))"""
+        args = args + (like, like, like)
     sql += " ORDER BY cb.name"
     with _conn(db_path) as conn:
         return conn.execute(sql, args).fetchall()

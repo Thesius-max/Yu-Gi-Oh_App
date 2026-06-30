@@ -2538,6 +2538,87 @@ _STEP_TOKENS = [
 ]
 
 
+class ComboPlaybackDialog(QDialog):
+    """Spielt die Schritte einer Kombo Schritt fuer Schritt durch (Review/
+    Lernen): der aktuelle Schritt ist hervorgehoben (Gold, fett), erledigte
+    normal, kommende abgeblendet. Reine Anzeige; Pfeiltasten oder Buttons
+    navigieren."""
+
+    _DONE = QColor("#efe9f5")
+    _CURRENT = QColor("#d4af37")
+    _UPCOMING = QColor("#9b90b5")
+
+    def __init__(self, steps: list[str], title: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Durchspielen — {title}")
+        self.resize(560, 480)
+        self._steps = steps
+        self._idx = 0
+
+        layout = QVBoxLayout(self)
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        for s in steps:
+            QListWidgetItem(s, self.list)
+        layout.addWidget(self.list, stretch=1)
+
+        nav = QHBoxLayout()
+        self.prev_btn = QPushButton("◀ Zurück")
+        self.next_btn = QPushButton("Weiter ▶")
+        self.prev_btn.clicked.connect(self._prev)
+        self.next_btn.clicked.connect(self._next)
+        self.pos_label = QLabel("")
+        self.pos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav.addWidget(self.prev_btn)
+        nav.addWidget(self.pos_label, stretch=1)
+        nav.addWidget(self.next_btn)
+        layout.addLayout(nav)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_btn = QPushButton("Schließen")
+        close_btn.clicked.connect(self.accept)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+
+        self._render()
+
+    def _prev(self) -> None:
+        if self._idx > 0:
+            self._idx -= 1
+            self._render()
+
+    def _next(self) -> None:
+        if self._idx < len(self._steps) - 1:
+            self._idx += 1
+            self._render()
+
+    def _render(self) -> None:
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            font = it.font()
+            font.setBold(i == self._idx)
+            it.setFont(font)
+            it.setForeground(
+                self._CURRENT if i == self._idx
+                else self._DONE if i < self._idx
+                else self._UPCOMING
+            )
+        self.list.scrollToItem(self.list.item(self._idx))
+        self.pos_label.setText(f"Schritt {self._idx + 1}/{len(self._steps)}")
+        self.prev_btn.setEnabled(self._idx > 0)
+        self.next_btn.setEnabled(self._idx < len(self._steps) - 1)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Right:
+            self._next()
+        elif event.key() == Qt.Key.Key_Left:
+            self._prev()
+        else:
+            super().keyPressEvent(event)
+
+
 class ComboView(QWidget):
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -2555,6 +2636,15 @@ class ComboView(QWidget):
         self.deck_filter_cb.currentIndexChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self.deck_filter_cb, stretch=1)
         lv.addLayout(filter_row)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Suche: Name, Archetyp, Baustein …")
+        self.search_edit.setClearButtonEnabled(True)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self.refresh)
+        self.search_edit.textChanged.connect(self._search_timer.start)
+        lv.addWidget(self.search_edit)
         lv.addWidget(QLabel("Meine Kombos:"))
         self.combo_list = QListWidget()
         self.combo_list.currentItemChanged.connect(self._on_select)
@@ -2647,6 +2737,10 @@ class ComboView(QWidget):
             "Schritte (eine Zeile pro Schritt — speichert automatisch):"
         ))
         steps_head.addStretch()
+        play_btn = QPushButton("Durchspielen…")
+        play_btn.setToolTip("Die Schritte Schritt für Schritt durchgehen")
+        play_btn.clicked.connect(self._play_steps)
+        steps_head.addWidget(play_btn)
         notation_btn = QPushButton("Notation…")
         notation_btn.clicked.connect(self._show_notation_help)
         steps_head.addWidget(notation_btn)
@@ -2699,7 +2793,10 @@ class ComboView(QWidget):
         self.combo_list.blockSignals(True)
         self.combo_list.clear()
         combos = (
-            ydb.list_combos(self.repo.db_path, self.deck_filter_cb.currentData())
+            ydb.list_combos(
+                self.repo.db_path, self.deck_filter_cb.currentData(),
+                text=self.search_edit.text(),
+            )
             if self.repo.exists() else []
         )
         for c in combos:
@@ -3151,6 +3248,22 @@ class ComboView(QWidget):
             )
             self.steps_edit.setTextCursor(cursor)
         self.steps_edit.setFocus()
+
+    def _play_steps(self) -> None:
+        """Die Schritte der aktuellen Kombo Schritt fuer Schritt durchspielen
+        (aus dem Editor, inkl. ungespeicherter Zeilen)."""
+        steps = [
+            line.strip()
+            for line in self.steps_edit.toPlainText().splitlines()
+            if line.strip()
+        ]
+        if not steps:
+            QMessageBox.information(
+                self, "Durchspielen", "Diese Kombo hat noch keine Schritte."
+            )
+            return
+        title = self.name_edit.text().strip() or "Kombo"
+        ComboPlaybackDialog(steps, title, self).exec()
 
     def _show_notation_help(self) -> None:
         dlg = QDialog(self)

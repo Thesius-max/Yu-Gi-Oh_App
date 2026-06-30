@@ -359,6 +359,24 @@ class DbTests(unittest.TestCase):
         self.assertEqual(cards[self.main_id]["copies"], 3)
         self.assertIn("starter", cards[self.main_id]["roles"])
 
+    def test_list_combos_text_filter(self):
+        # Filter nach Name, Archetyp oder Baustein-Kartenname.
+        c_name = ydb.create_combo(self.db, "Resonator-Turbo")
+        c_arch = ydb.create_combo(self.db, "Andere Linie", archetype="Resonator")
+        c_piece = ydb.create_combo(self.db, "Dritte Linie")
+        ydb.add_combo_card(self.db, c_piece, self.main_id, 1)
+        # Anzeigename des Bausteins fuer die Piece-Suche ermitteln.
+        piece_name = ydb.combo_cards(self.db, c_piece)[0]["name"]
+
+        def ids(text):
+            return {c["combo_id"] for c in ydb.list_combos(self.db, text=text)}
+
+        self.assertIn(c_name, ids("resonator"))     # Name-Treffer
+        self.assertIn(c_arch, ids("resonator"))      # Archetyp-Treffer
+        self.assertNotIn(c_piece, ids("resonator"))  # kein Bezug
+        self.assertIn(c_piece, ids(piece_name[:4]))  # Baustein-Name-Treffer
+        self.assertEqual(ids("garantiert-kein-treffer-xyz"), set())
+
     def test_deck_corpus_diff(self):
         # Eigenes Deck vs. Referenz-Liste, kopiengenau (Main+Extra).
         mine = ydb.create_deck(self.db, "Mein")
