@@ -42,9 +42,9 @@ from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QProgressDialog, QPushButton, QSpinBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout,
-    QWidget,
+    QProgressDialog, QPushButton, QSpinBox, QSplitter, QStyledItemDelegate,
+    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 import yugioh_db as ydb
@@ -921,6 +921,29 @@ class CardDetailDialog(_CardImageView, QDialog):
 # Sammlungsverwaltung (eigener Tab)
 # ---------------------------------------------------------------------------
 
+class _QuantityDelegate(QStyledItemDelegate):
+    """Spinbox-Editor *nach Bedarf* fuer die Mengen-Spalte der Sammlung --
+    statt eines persistenten QSpinBox je Zeile, das bei mehreren hundert
+    Eintraegen den Tabellen-Neuaufbau spuerbar bremst (~65 ms fuer 700 Zeilen).
+    Der Editor entsteht erst beim Bearbeiten einer Zelle."""
+
+    def createEditor(self, parent, option, index):
+        sb = QSpinBox(parent)
+        sb.setRange(1, 9999)
+        sb.setFrame(False)
+        return sb
+
+    def setEditorData(self, editor, index):
+        try:
+            editor.setValue(int(index.data(Qt.ItemDataRole.EditRole)))
+        except (TypeError, ValueError):
+            editor.setValue(1)
+
+    def setModelData(self, editor, model, index):
+        editor.interpretText()
+        model.setData(index, editor.value(), Qt.ItemDataRole.EditRole)
+
+
 class CollectionView(QWidget):
     COLUMNS = ["Name", "Menge", "Set", "Edition", "Zustand", "Sprache", "Notiz"]
 
@@ -985,7 +1008,14 @@ class CollectionView(QWidget):
         self.table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        # Nur die Mengen-Spalte ist editierbar (per Doppelklick/F2, Spinbox-
+        # Editor on demand); alle anderen Zellen bleiben schreibgeschuetzt.
+        self.table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
+        self.table.setItemDelegateForColumn(1, _QuantityDelegate(self.table))
+        self.table.itemChanged.connect(self._on_item_changed)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -1010,9 +1040,12 @@ class CollectionView(QWidget):
         item = self.table.item(row, 0)
         return item.data(_COLLECTION_CARD_ID) if item else None
 
-    def _open_detail(self, row: int, _col: int) -> None:
+    def _open_detail(self, row: int, col: int) -> None:
         """Detail-Pop-up der Karte in 'row' oeffnen; Gruppen-Kopfzeilen
-        (ohne card_id) ignorieren."""
+        (ohne card_id) ignorieren. Doppelklick auf die Mengen-Spalte oeffnet
+        den Spinbox-Editor statt des Pop-ups."""
+        if col == 1:
+            return
         item = self.table.item(row, 0)
         card_id = item.data(_COLLECTION_CARD_ID) if item else None
         if card_id is None:
@@ -1071,6 +1104,9 @@ class CollectionView(QWidget):
         for row in rows:
             buckets[ydb.card_category(row["type"])].append(row)
         self.table.setUpdatesEnabled(False)
+        # Befuellen ohne itemChanged-Signale -- sonst feuert jede Mengen-Zelle
+        # beim Aufbau und schriebe in die DB zurueck.
+        self.table.blockSignals(True)
         self.table.clearSpans()
         self.table.setRowCount(0)
         try:
@@ -1084,6 +1120,7 @@ class CollectionView(QWidget):
                 for row in group:
                     self._add_data_row(row)
         finally:
+            self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
         self._update_summary(rows)
 
@@ -1107,6 +1144,7 @@ class CollectionView(QWidget):
         name_item.setData(Qt.ItemDataRole.UserRole, row["entry_id"])
         # card_id zusaetzlich fuer die Hover-Bildvorschau.
         name_item.setData(_COLLECTION_CARD_ID, row["card_id"])
+        name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         # Karten ohne deutsche Uebersetzung sichtbar markieren -- der Name oben
         # ist dann der englische Fallback.
         if not row["name_de"]:
@@ -1118,23 +1156,36 @@ class CollectionView(QWidget):
             )
         self.table.setItem(r, 0, name_item)
 
-        spin = QSpinBox()
-        # Obergrenze nie unter die tatsaechliche Menge -- sonst wuerde die
-        # Anzeige stillschweigend auf das Maximum gekappt.
-        spin.setRange(1, max(999, row["quantity"]))
-        spin.setValue(row["quantity"])
-        # Menge live in die DB schreiben (entry_id ueber Default gebunden).
-        spin.valueChanged.connect(
-            lambda value, e=row["entry_id"]: self._on_qty_changed(e, value)
-        )
-        self.table.setCellWidget(r, 1, spin)
+        # Menge als editierbares Zahl-Item (EditRole == DisplayRole bei
+        # QTableWidgetItem); der _QuantityDelegate oeffnet beim Bearbeiten ein
+        # Spinbox. Aenderungen laufen ueber itemChanged -> _on_item_changed.
+        qty_item = QTableWidgetItem()
+        qty_item.setData(Qt.ItemDataRole.EditRole, int(row["quantity"]))
+        qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(r, 1, qty_item)
 
         for col, key in enumerate(
             ("set_code", "edition", "condition", "language", "notes"), start=2
         ):
-            self.table.setItem(r, col, QTableWidgetItem(row[key] or ""))
+            cell = QTableWidgetItem(row[key] or "")
+            cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(r, col, cell)
 
-    def _on_qty_changed(self, entry_id: int, value: int) -> None:
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """Mengenaenderung (Spalte 1) in die DB schreiben. Andere Spalten sind
+        schreibgeschuetzt; waehrend des Tabellenaufbaus sind Signale geblockt."""
+        if item.column() != 1:
+            return
+        name_item = self.table.item(item.row(), 0)
+        entry_id = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+        if entry_id is None:
+            return
+        try:
+            value = int(item.data(Qt.ItemDataRole.EditRole))
+        except (TypeError, ValueError):
+            return
+        if value < 1:
+            return
         ydb.set_collection_quantity(self.repo.db_path, entry_id, value)
         self._update_summary()
 
