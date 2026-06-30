@@ -29,8 +29,8 @@ import shutil
 import sys
 
 from PySide6.QtCore import (
-    Qt, QEvent, QMarginsF, QObject, QPoint, QRunnable, QThreadPool, QTimer,
-    QUrl, Signal,
+    Qt, QEvent, QMarginsF, QObject, QPoint, QRunnable, QSettings, QThreadPool,
+    QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QGuiApplication, QImage, QPageLayout,
@@ -1782,6 +1782,12 @@ class DeckView(QWidget):
         self.deck_id = self.deck_cb.currentData()
         self.refresh()
 
+    def select_deck(self, deck_id: int) -> None:
+        """Deck per ID auswaehlen, falls vorhanden (Sitzungswiederherstellung)."""
+        idx = self.deck_cb.findData(deck_id)
+        if idx >= 0:
+            self.deck_cb.setCurrentIndex(idx)
+
     def _new_deck(self) -> None:
         if not self.repo.exists():
             return
@@ -3385,8 +3391,11 @@ class HelpView(QWidget):
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    def __init__(self, db_path: str = ydb.DEFAULT_DB):
+    def __init__(self, db_path: str = ydb.DEFAULT_DB, restore_session: bool = False):
         super().__init__()
+        # Sitzungs-/Fensterstatus nur im echten App-Lauf (main()) wiederher-
+        # stellen/speichern -- in Tests/Smokes bleibt der Zustand neutral.
+        self._restore_session = restore_session
         self.setWindowTitle(
             f"Yu-Gi-Oh -- Sammlung & Suche  ·  v{ydb.APP_VERSION}"
         )
@@ -3420,6 +3429,7 @@ class MainWindow(QMainWindow):
         self.detail = DetailPanel(self.repo)
         splitter.addWidget(self.detail)
         splitter.setSizes([280, 380, 440])
+        self.splitter = splitter
 
         self.collection_view = CollectionView(self.repo)
         self.deck_view = DeckView(self.repo)
@@ -3460,6 +3470,8 @@ class MainWindow(QMainWindow):
             )
         self._loading = False
         self.search()
+        if self._restore_session:
+            self._restore_session_state()
         # Stiller Hinweis auf neue App-Versionen, kurz nach dem Start (ein
         # Mini-Request; offline/Fehler bleibt einfach unsichtbar).
         QTimer.singleShot(2000, lambda: self._check_app_version(manual=False))
@@ -3600,7 +3612,66 @@ class MainWindow(QMainWindow):
         # Noch nicht gespeicherte Kombo-Eingaben sichern (Auto-Save-Timer
         # koennte sonst verfallen).
         self.combo_view.flush_pending()
+        if self._restore_session:
+            self._save_session_state()
         super().closeEvent(event)
+
+    # -- Sitzungs-/Fensterstatus (QSettings) ----------------------------------
+
+    def _save_session_state(self) -> None:
+        """Fenster-, Tab-, Deck- und Sammlungsfilter-Zustand sichern."""
+        s = QSettings()
+        s.setValue("win/geometry", self.saveGeometry())
+        s.setValue("win/splitter", self.splitter.saveState())
+        s.setValue("ui/tab", self.tabs.currentIndex())
+        did = self.deck_view.deck_id
+        s.setValue("ui/deck_id", -1 if did is None else int(did))
+        cv = self.collection_view
+        s.setValue("coll/text", cv.filter_text.text())
+        s.setValue("coll/cat", cv.filter_cat.currentData() or "")
+        s.setValue("coll/attr", cv.filter_attr.currentData() or "")
+        s.setValue("coll/arch", cv.filter_arch.currentData() or "")
+        s.setValue("coll/untranslated", cv.filter_untranslated.isChecked())
+
+    def _restore_session_state(self) -> None:
+        """Gesicherten Zustand wiederherstellen (nach dem Aufbau der Views)."""
+        s = QSettings()
+        geo = s.value("win/geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        spl = s.value("win/splitter")
+        if spl is not None:
+            self.splitter.restoreState(spl)
+        # Sammlungsfilter ohne Zwischen-Refreshes setzen, danach einmal anwenden.
+        cv = self.collection_view
+        widgets = (
+            cv.filter_text, cv.filter_cat, cv.filter_attr,
+            cv.filter_arch, cv.filter_untranslated,
+        )
+        for w in widgets:
+            w.blockSignals(True)
+        cv.filter_text.setText(s.value("coll/text", "") or "")
+        for combo, key in (
+            (cv.filter_cat, "coll/cat"), (cv.filter_attr, "coll/attr"),
+            (cv.filter_arch, "coll/arch"),
+        ):
+            idx = combo.findData(s.value(key, "") or None)
+            combo.setCurrentIndex(max(idx, 0))
+        cv.filter_untranslated.setChecked(
+            s.value("coll/untranslated", False, type=bool)
+        )
+        for w in widgets:
+            w.blockSignals(False)
+        if self.repo.exists():
+            cv._apply_filters()
+        # Gewaehltes Deck wiederherstellen.
+        did = s.value("ui/deck_id", -1, type=int)
+        if did is not None and did >= 0:
+            self.deck_view.select_deck(did)
+        # Zuletzt aktives Tab.
+        tab = s.value("ui/tab", 0, type=int)
+        if tab is not None and 0 <= tab < self.tabs.count():
+            self.tabs.setCurrentIndex(tab)
 
     # -- Kartendaten-Update (Menü 'Daten') ------------------------------------
 
@@ -3967,8 +4038,11 @@ def apply_theme(app: QApplication) -> None:
 
 def main() -> None:
     app = QApplication(sys.argv)
+    # Identitaet fuer QSettings (Sitzungs-/Fensterstatus).
+    app.setOrganizationName(ydb.APP_DIR_NAME)
+    app.setApplicationName(ydb.APP_DIR_NAME)
     apply_theme(app)
-    win = MainWindow()
+    win = MainWindow(restore_session=True)
     win.show()
     sys.exit(app.exec())
 
