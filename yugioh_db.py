@@ -45,7 +45,7 @@ APP_DIR_NAME = "YugiohSammlung"
 # App-Version: eine Nummer fuer alle Plattform-Builds (Windows + macOS).
 # Release-Ritual: hochzaehlen -> committen -> Tag "v<version>" pushen; die CI
 # baut dann alle drei ZIPs und haengt sie an EIN gemeinsames GitHub-Release.
-APP_VERSION = "0.6.7"
+APP_VERSION = "0.7.0"
 RELEASES_API_URL = (
     "https://api.github.com/repos/Thesius-max/Yu-Gi-Oh_App/releases/latest"
 )
