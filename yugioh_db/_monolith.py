@@ -2645,23 +2645,3 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
         "role_copies": role_copies,
         "suggestions": suggestions[:limit],
     }
-
-
-# ---------------------------------------------------------------------------
-# CLI: erstes Befuellen / Update
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import sys
-
-    db = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DB
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
-
-    if cmd == "build":
-        print("Lade Kartendatenbank von der API (englisch + deutsch) ...")
-        n = build_database(db)
-        print(f"Fertig: {n} Karten in {db} importiert.")
-    elif cmd == "check":
-        print("Update verfügbar." if needs_update(db) else "Datenbank ist aktuell.")
-    else:
-        print("Verwendung: python yugioh_db.py [build|check] [db_pfad]")

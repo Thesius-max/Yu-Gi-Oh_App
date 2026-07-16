@@ -9,7 +9,7 @@ ML-Heuristiken wie Packer/Dropper aus (typisch: Trojan:Win32/Wacatac.C!ml).
 
 Voraussetzungen:
     pip install pyinstaller
-    python yugioh_db.py build seed.sqlite3   # einmalig die Seed-DB erzeugen
+    python -m yugioh_db build seed.sqlite3   # einmalig die Seed-DB erzeugen
 
 Aufruf:
     python build_app.py
@@ -39,7 +39,7 @@ def main() -> None:
     if not SEED.exists():
         sys.exit(
             "seed.sqlite3 fehlt.\n"
-            "Bitte einmalig erzeugen:  python yugioh_db.py build seed.sqlite3"
+            "Bitte einmalig erzeugen:  python -m yugioh_db build seed.sqlite3"
         )
     # --add-data nutzt ';' auf Windows, ':' auf macOS/Linux.
     sep = ";" if os.name == "nt" else ":"

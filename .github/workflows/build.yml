@@ -1,7 +1,7 @@
 # Baut alle Verteil-Bundles auf GitHub-Runnern -- PyInstaller kann nicht
 # cross-kompilieren, deshalb je Plattform ein eigener Runner.
 #
-# Drei Varianten, EINE Versionsnummer (APP_VERSION in yugioh_db.py):
+# Drei Varianten, EINE Versionsnummer (APP_VERSION im Paket yugioh_db):
 #   - windows (windows-latest): One-Folder-Bundle mit .exe
 #   - arm64   (macos-latest):   Apple Silicon, MacBooks ab ca. 2021
 #   - x86_64  (macos-15-intel): aeltere Intel-Macs; GitHub bietet diesen
@@ -45,7 +45,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Seed-Datenbank erzeugen (YGOPRODeck-API)
-        run: python yugioh_db.py build seed.sqlite3
+        run: python -m yugioh_db build seed.sqlite3
 
       - name: App bauen
         run: python build_app.py
@@ -82,7 +82,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Seed-Datenbank erzeugen (YGOPRODeck-API)
-        run: python yugioh_db.py build seed.sqlite3
+        run: python -m yugioh_db build seed.sqlite3
 
       - name: App bauen
         run: python build_app.py
