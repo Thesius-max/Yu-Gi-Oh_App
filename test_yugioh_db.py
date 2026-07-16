@@ -545,5 +545,95 @@ class DbTests(unittest.TestCase):
         self.assertIn("- Effekt:", md)
 
 
+    # -- Deckbau-Hilfe: Was-waere-wenn, Linien-Spielbarkeit, Resilienz ------
+
+    def _fresh_main_ids(self, n: int) -> list[int]:
+        """Main-taugliche Karten, die in KEINER Kombo stecken -- so bleiben
+        die Rollen-Kopien des Testdecks exakt vorhersagbar (die Dev-DB
+        bringt echte Kombos mit Rollen mit)."""
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT id FROM cards WHERE frame_type IN ('effect','normal') "
+                "AND id NOT IN (SELECT card_id FROM combo_cards) LIMIT ?",
+                (n,),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), n)
+        return [r["id"] for r in rows]
+
+    def test_deck_what_if(self):
+        starter_id, blank_id = self._fresh_main_ids(2)
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, starter_id, zone="main", count=3)
+        ydb.add_card_to_deck(self.db, deck, blank_id, zone="main", count=2)
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, starter_id, 1)
+        ydb.set_combo_card_role(self.db, combo, starter_id, "starter")
+
+        res = ydb.deck_what_if(self.db, deck, hand_sizes=(2,))
+        self.assertEqual(res["deck_size"], 5)
+        # Basis: P(>=1 von 3 Startern in 2 aus 5) = 1 - C(2,2)/C(5,2) = 0.9
+        self.assertAlmostEqual(res["base"][2]["starter"], 0.9)
+        cards = {c["card_id"]: c for c in res["cards"]}
+        # Starter am 3-Kopien-Limit: kein '+1'-Szenario.
+        self.assertIsNone(cards[starter_id]["plus"])
+        # -1 Starter: N=4, 2 Starter -> 1 - C(2,2)/C(4,2) = 1 - 1/6
+        self.assertAlmostEqual(
+            cards[starter_id]["minus"][2]["starter"], 1 - 1 / 6)
+        # +1 rollenlose Karte verduennt: N=6, 3 Starter ->
+        # 1 - C(3,2)/C(6,2) = 0.8
+        self.assertAlmostEqual(cards[blank_id]["plus"][2]["starter"], 0.8)
+        # Handtraps gibt es im Testdeck keine.
+        self.assertAlmostEqual(res["base"][2]["handtrap"], 0.0)
+
+    def test_deck_line_playability(self):
+        starter_id, payoff_id = self._fresh_main_ids(2)
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, starter_id, zone="main", count=2)
+        ydb.add_card_to_deck(self.db, deck, payoff_id, zone="main", count=1)
+
+        k1 = ydb.create_combo(self.db, "K1")
+        ydb.add_combo_card(self.db, k1, starter_id, 1)
+        ydb.set_combo_card_role(self.db, k1, starter_id, "starter")
+        ydb.add_combo_card(self.db, k1, payoff_id, 1)
+        ydb.set_combo_card_role(self.db, k1, payoff_id, "payoff")
+        k2 = ydb.create_combo(self.db, "K2")
+        ydb.add_combo_card(self.db, k2, payoff_id, 1)
+        variant = ydb.create_combo(self.db, "Var")
+        ydb.set_combo_parent(self.db, variant, k1)
+        ydb.add_combo_card(self.db, variant, starter_id, 1)
+        ydb.set_combo_card_role(self.db, variant, starter_id, "starter")
+
+        res = ydb.deck_line_playability(self.db, deck, hand_sizes=(1,))
+        # K1: 1 Starter-Baustein, 2 Main-Kopien, P(1 aus 3 trifft) = 2/3.
+        self.assertEqual(res[k1]["starters"], 1)
+        self.assertEqual(res[k1]["copies"], 2)
+        self.assertAlmostEqual(res[k1]["hands"][1], 2 / 3)
+        # K2: kein Baustein als Starter eingestuft.
+        self.assertEqual(res[k2]["starters"], 0)
+        self.assertAlmostEqual(res[k2]["hands"][1], 0.0)
+        # Varianten (Branches) bekommen keinen eigenen Eintrag.
+        self.assertNotIn(variant, res)
+
+    def test_deck_boss_lines_variants(self):
+        parent = ydb.create_combo(self.db, "Haupt")
+        child = ydb.create_combo(self.db, "Var")
+        ydb.set_combo_parent(self.db, child, parent)
+        solo = ydb.create_combo(self.db, "Solo")
+        deck = ydb.create_deck(self.db, "T")
+
+        lines = {
+            line["combo_id"]: line
+            for g in ydb.deck_boss_lines(self.db, deck)
+            for line in g["lines"]
+        }
+        self.assertEqual(lines[parent]["variants"], ["Var"])
+        self.assertEqual(lines[solo]["variants"], [])
+        self.assertNotIn(child, lines)  # Branch ist keine eigene Linie
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -440,15 +440,25 @@ def deck_boss_lines(db_path: str, deck_id: int) -> list[dict]:
     """Linien (Kombos) gruppiert nach Bossmonster; innerhalb der Gruppen
     bleibt die Abdeckungs-Sortierung aus combos_for_deck erhalten, ebenso
     zwischen den Gruppen (beste Linie zuerst). Kombos ohne Boss bilden die
-    letzte Gruppe (boss_card_id None).
-    Rueckgabe: [{'boss_card_id', 'boss_name', 'lines': [wie combos_for_deck]}]."""
+    letzte Gruppe (boss_card_id None). Jede Linie traegt ihre Varianten
+    (Interruption-Branches) als Namensliste -- eine Linie ohne Branches
+    steht bei gegnerischer Stoerung 'nackt' da (Resilienz-Anzeige).
+    Rueckgabe: [{'boss_card_id', 'boss_name',
+                 'lines': [wie combos_for_deck + 'variants': [name, ...]]}]."""
     with _conn(db_path) as conn:
         rows = conn.execute(
             """SELECT cb.combo_id, cb.boss_card_id,
                       COALESCE(b.name_de, b.name) AS boss_name
                FROM combos cb LEFT JOIN cards b ON b.id = cb.boss_card_id"""
         ).fetchall()
+        variant_rows = conn.execute(
+            "SELECT parent_combo_id, name FROM combos "
+            "WHERE parent_combo_id IS NOT NULL ORDER BY name"
+        ).fetchall()
     boss_of = {r["combo_id"]: (r["boss_card_id"], r["boss_name"]) for r in rows}
+    variants_of: dict[int, list[str]] = {}
+    for r in variant_rows:
+        variants_of.setdefault(r["parent_combo_id"], []).append(r["name"])
     groups: dict = {}
     for line in combos_for_deck(db_path, deck_id):
         boss_id, boss_name = boss_of.get(line["combo_id"], (None, None))
@@ -456,6 +466,7 @@ def deck_boss_lines(db_path: str, deck_id: int) -> list[dict]:
             boss_id,
             {"boss_card_id": boss_id, "boss_name": boss_name, "lines": []},
         )
+        line["variants"] = variants_of.get(line["combo_id"], [])
         g["lines"].append(line)
     out = [g for k, g in groups.items() if k is not None]
     if None in groups:

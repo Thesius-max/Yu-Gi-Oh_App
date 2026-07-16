@@ -17,7 +17,7 @@ import sqlite3
 from typing import Iterable, Optional
 
 from .combos import COMBO_ROLES
-from .decks import deck_counts
+from .decks import MAX_COPIES, deck_counts
 from .schema import _conn
 
 
@@ -114,6 +114,98 @@ def deck_consistency(
             "brick": 1.0 - p_starter,
         }
     return {"deck_size": size, "roles": roles, "hands": hands}
+
+
+def deck_what_if(
+    db_path: str, deck_id: int, hand_sizes: Iterable[int] = (5, 6)
+) -> dict:
+    """Was-waere-wenn je Main-Deck-Karte: wie veraendern +1/-1 Kopie die
+    Starthand-Kennzahlen P(>=1 Starter) und P(>=1 Handtrap)?
+
+    Beantwortet die haeufigste Deckbau-Frage ('Wo lohnt die dritte Kopie?')
+    exakt statt gefuehlt. Auch rollenlose Karten bewegen die Werte -- +1
+    verduennt das Deck (Nenner waechst), -1 verdichtet es. Brick ist
+    1 - Starter (rechnet der Aufrufer). 'plus' ist None, wenn die Karte
+    schon am 3-Kopien-Limit liegt (MAX_COPIES).
+
+    Rueckgabe: {'deck_size', 'base': {hand: {'starter', 'handtrap'}},
+    'cards': [{'card_id', 'name', 'copies', 'roles',
+               'plus': {hand: {...}} | None, 'minus': {hand: {...}}}]}."""
+    size = deck_counts(db_path, deck_id)["main"]
+    roles = deck_role_copies(db_path, deck_id)
+    hand_sizes = tuple(hand_sizes)
+
+    def metrics(n: int, role_copies: dict[str, int]) -> dict:
+        return {
+            hand: {
+                "starter": hypergeom_at_least(
+                    n, role_copies.get("starter", 0), hand),
+                "handtrap": hypergeom_at_least(
+                    n, role_copies.get("handtrap", 0), hand),
+            }
+            for hand in hand_sizes
+        }
+
+    def shifted(card_roles: list[str], delta: int) -> dict[str, int]:
+        out = dict(roles)
+        for r in card_roles:
+            out[r] = out.get(r, 0) + delta
+        return out
+
+    cards = []
+    for c in deck_main_cards(db_path, deck_id):
+        plus = None
+        if c["copies"] < MAX_COPIES:
+            plus = metrics(size + 1, shifted(c["roles"], +1))
+        minus = metrics(size - 1, shifted(c["roles"], -1))
+        cards.append({
+            "card_id": c["card_id"], "name": c["name"],
+            "copies": c["copies"], "roles": c["roles"],
+            "plus": plus, "minus": minus,
+        })
+    return {"deck_size": size, "base": metrics(size, roles), "cards": cards}
+
+
+def deck_line_playability(
+    db_path: str, deck_id: int, hand_sizes: Iterable[int] = (5, 6)
+) -> dict[int, dict]:
+    """Startbarkeit je Kombo-Hauptlinie: P(>=1 der als 'starter'
+    eingestuften Bausteine DIESER Linie in der Starthand). Zaehlt nur
+    Main-Deck-Kopien (nur daraus wird gezogen); Varianten (Branches)
+    bekommen keinen Eintrag (Branch-Modell: nur Hauptlinien in Aggregaten).
+
+    Rueckgabe je Hauptlinie: {combo_id: {'starters': verschiedene
+    Starter-Bausteine der Kombo, 'copies': Summe ihrer Main-Kopien,
+    'hands': {hand: p}}}. starters == 0 heisst: kein Baustein als Starter
+    eingestuft -- die Anzeige zeigt dann keinen Wert statt 0 %."""
+    size = deck_counts(db_path, deck_id)["main"]
+    hand_sizes = tuple(hand_sizes)
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT cb.combo_id,
+                      COUNT(cc.card_id) AS starters,
+                      COALESCE(SUM((SELECT dc.quantity FROM deck_cards dc
+                                    WHERE dc.deck_id = ? AND dc.zone = 'main'
+                                      AND dc.card_id = cc.card_id)), 0) AS copies
+               FROM combos cb
+               LEFT JOIN combo_cards cc
+                 ON cc.combo_id = cb.combo_id AND cc.role = 'starter'
+               WHERE cb.parent_combo_id IS NULL
+               GROUP BY cb.combo_id""",
+            (deck_id,),
+        ).fetchall()
+    out: dict[int, dict] = {}
+    for r in rows:
+        copies = int(r["copies"])
+        out[r["combo_id"]] = {
+            "starters": int(r["starters"]),
+            "copies": copies,
+            "hands": {
+                hand: hypergeom_at_least(size, copies, hand)
+                for hand in hand_sizes
+            },
+        }
+    return out
 
 
 def deck_main_cards(db_path: str, deck_id: int) -> list[dict]:
