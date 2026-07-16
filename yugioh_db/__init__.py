@@ -11,7 +11,10 @@ Fachmodule (schema, api, decks, combos, ...) loesen ihn Stueck fuer
 Stueck ab, ohne dass sich fuer Aufrufer ein Name aendert.
 """
 
-from ._monolith import *  # noqa: F401,F403 -- oeffentliche API der Datenschicht
+from .schema import *  # noqa: F401,F403
+from .api import *  # noqa: F401,F403
+from .updates import *  # noqa: F401,F403
+from ._monolith import *  # noqa: F401,F403 -- restliche API (schrumpft)
 # Von der GUI genutzte Verbindungs-Helfer (Unterstrich-Namen deckt der
 # Stern-Import nicht ab).
-from ._monolith import _conn, _connect  # noqa: F401
+from .schema import _conn, _connect  # noqa: F401
