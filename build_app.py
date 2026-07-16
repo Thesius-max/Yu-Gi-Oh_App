@@ -51,7 +51,7 @@ def main() -> None:
                                             # Defender-Fehlalarme aus (Wacatac!ml)
         "--name", APP_NAME,
         "--add-data", f"{SEED}{sep}.",      # Seed-DB ins Bundle legen
-        str(ROOT / "yugioh_gui.py"),
+        str(ROOT / "start_app.py"),
     ]
     print("PyInstaller:", " ".join(args))
     subprocess.check_call(args)
