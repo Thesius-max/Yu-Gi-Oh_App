@@ -147,16 +147,28 @@ speisen nur die Vorschläge (siehe Kombo-Hilfe → Vorschläge). Tagge sie mit
 
 ## Kombo-Hilfe (rechte Box)
 
-Drei Reiter:
+Fünf Reiter:
 
 - **Kombos** — Kombos nach Abdeckung im Deck, mit Bausteinen und Schritten.
   **Fehlende Bausteine ins Deck** ergänzt fehlende Karten; **Neue Kombo aus
   diesem Deck…** legt eine Kombo aus angekreuzten Deck-Karten an.
 - **Fahrplan** — Karten je **Rolle** und **Linien zum Boss**; Doppelklick auf
   eine Linie öffnet die Kombo. Oben steht die **Konsistenz** (Wahrscheinlichkeit
-  für Starter/Handtrap in der Starthand, Brick-Quote).
+  für Starter/Handtrap in der Starthand, Brick-Quote). Jede Linie zeigt ihre
+  **Startbarkeit** (Wahrscheinlichkeit, mindestens einen als *Starter*
+  eingestuften Baustein der Linie in der Starthand zu haben) und mit `↳n`
+  ihre **Interruption-Branches** (Varianten) — eine Linie ohne Branches steht
+  bei gegnerischer Störung ohne Plan B da. Details im Tooltip.
 - **Vorschläge** — Kartenempfehlungen aus dem Synergie-Graphen samt
   **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab.
+- **Starthand** — interaktiver Simulator: Karten ankreuzen (Wahrscheinlichkeit
+  „alle zusammen" oder „mindestens eine") und Zufallshände ziehen, mit
+  Rollen-/Brick-Verdikt.
+- **Hebel** — Was-wäre-wenn je Main-Deck-Karte: Wie verändert **eine Kopie
+  mehr oder weniger** die Starter-/Handtrap-Wahrscheinlichkeit? Sortiert
+  danach, wo +1 am meisten bringt; ±1 verschiebt auch die Deckgröße, deshalb
+  bewegen selbst Karten ohne Rolle die Werte. Klick auf eine Zeile zeigt die
+  volle Aufschlüsselung (beide Handgrößen, +1 und −1, inkl. Brick).
 
 **Kombo-Linien exportieren…** schreibt die Linien des Decks als `.txt` oder
 `.pdf` — z. B. um sie einem erfahrenen Spieler zum Drüberschauen zu geben.

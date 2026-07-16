@@ -299,6 +299,19 @@ class DeckView(QWidget):
         siv.addWidget(self.sim_verdict)
         self.helper_tabs.addTab(sim_tab, "Starthand")
 
+        lever_tab = QWidget()
+        lv = QVBoxLayout(lever_tab)
+        self.lever_base = QLabel("")
+        self.lever_base.setWordWrap(True)
+        lv.addWidget(self.lever_base)
+        self.lever_list = QListWidget()
+        self.lever_list.currentItemChanged.connect(self._show_lever_detail)
+        lv.addWidget(self.lever_list, stretch=1)
+        self.lever_detail = QLabel("")
+        self.lever_detail.setWordWrap(True)
+        lv.addWidget(self.lever_detail)
+        self.helper_tabs.addTab(lever_tab, "Hebel")
+
         # Kombo-Linien als Datei weitergeben (z.B. an erfahrene Spieler).
         export_combos_btn = QPushButton("Kombo-Linien exportieren…")
         export_combos_btn.clicked.connect(self._export_combos)
@@ -480,6 +493,7 @@ class DeckView(QWidget):
             self._refresh_plan()
             self._refresh_combos()
             self._refresh_simulator()
+            self._refresh_leverage()
             return
         # Sammlung<->Deck-Abgleich: fehlende Kopien je Karte (andere Decks
         # binden Bestand). Nur Warnung, blockiert nichts.
@@ -507,6 +521,7 @@ class DeckView(QWidget):
         self._refresh_combos()
         self._refresh_suggestions()
         self._refresh_simulator()
+        self._refresh_leverage()
 
     def _export_combos(self) -> None:
         """Kombo-Linien des Decks als .txt oder .pdf speichern."""
@@ -600,14 +615,124 @@ class DeckView(QWidget):
         groups = ydb.deck_boss_lines(self.repo.db_path, self.deck_id)
         if not groups:
             self._add_plan_note(self.boss_lines, "Noch keine Kombos angelegt.")
+        # Startbarkeit je Linie (>=1 ihrer Starter in der Starthand) und
+        # Resilienz (Interruption-Branches) an jeder Linie anzeigen.
+        play = ydb.deck_line_playability(self.repo.db_path, self.deck_id)
         for g in groups:
             self._add_plan_header(self.boss_lines, g["boss_name"] or "Ohne Boss")
             for line in g["lines"]:
                 cov = (f"{line['covered']}/{line['total']}"
                        if line["total"] else "leer")
-                item = QListWidgetItem(f"{cov}  {line['name']}")
+                label = f"{cov}  {line['name']}"
+                tips = []
+                pl = play.get(line["combo_id"])
+                if pl and pl["starters"]:
+                    label = f"{cov} · {pct(pl['hands'][5])}  {line['name']}"
+                    tips.append(
+                        f"Startbar (≥1 Starter der Linie): "
+                        f"Hand 5 {pct(pl['hands'][5])} · "
+                        f"Hand 6 {pct(pl['hands'][6])} — "
+                        f"{pl['starters']} Starter-Baustein(e), "
+                        f"{pl['copies']} Kopie(n) im Main Deck"
+                    )
+                else:
+                    tips.append(
+                        "Kein Baustein als Starter eingestuft — "
+                        "Startbarkeit unbekannt (Rollen im Tab 'Kombos')."
+                    )
+                if line["variants"]:
+                    label += f"  ↳{len(line['variants'])}"
+                    tips.append("Branches: " + ", ".join(line["variants"]))
+                else:
+                    tips.append(
+                        "Keine Interruption-Branches erfasst — die Linie "
+                        "steht bei gegnerischer Störung ohne Plan B da."
+                    )
+                item = QListWidgetItem(label)
+                item.setToolTip("\n".join(tips))
                 item.setData(Qt.ItemDataRole.UserRole, line["combo_id"])
                 self.boss_lines.addItem(item)
+
+    def _refresh_leverage(self) -> None:
+        """Hebel-Reiter: Was-wäre-wenn je Main-Deck-Karte (deck_what_if).
+        Die Liste sortiert nach Starter-Gewinn bei +1 (Hand 5) — 'wo lohnt
+        die nächste Kopie am meisten'; Karten am 3-Kopien-Limit stehen
+        unten. Klick auf eine Zeile zeigt die volle Aufschlüsselung."""
+        self.lever_base.setText("")
+        self.lever_list.clear()
+        self.lever_detail.setText("")
+        if self.deck_id is None or not self.repo.exists():
+            return
+        res = ydb.deck_what_if(self.repo.db_path, self.deck_id)
+        if res["deck_size"] == 0 or not res["cards"]:
+            self.lever_base.setText("Main Deck ist leer.")
+            return
+        base = res["base"]
+        base5 = base[5]
+        self.lever_base.setText(
+            f"Basis (Hand 5): ≥1 Starter {pct(base5['starter'])}  ·  "
+            f"≥1 Handtrap {pct(base5['handtrap'])}\n"
+            "Was ändert eine Kopie mehr oder weniger? ±1 verschiebt auch "
+            "die Deckgröße — deshalb bewegen selbst Karten ohne Rolle die "
+            "Werte. Klick auf eine Zeile zeigt Details."
+        )
+
+        def gain(c) -> float:
+            return c["plus"][5]["starter"] - base5["starter"]
+
+        def sort_key(c):
+            if c["plus"] is None:
+                return (1, 0.0, c["name"])
+            return (0, -gain(c), c["name"])
+
+        for c in sorted(res["cards"], key=sort_key):
+            roles = " [" + ", ".join(ROLE_DE[r] for r in c["roles"]) + "]" \
+                if c["roles"] else ""
+            if c["plus"] is None:
+                text = f"{c['name']} ({c['copies']}x{roles}): 3-Kopien-Limit"
+            else:
+                # Die Kennzahl zeigen, die sich staerker bewegt (Handtraps
+                # interessieren fuer Handtrap-Karten, sonst der Starter-Wert).
+                d_start = gain(c)
+                d_trap = c["plus"][5]["handtrap"] - base5["handtrap"]
+                metric, d = ("starter", d_start)
+                if abs(d_trap) > abs(d_start):
+                    metric, d = ("handtrap", d_trap)
+                label = "Starter" if metric == "starter" else "Handtrap"
+                text = (
+                    f"+1 {c['name']} ({c['copies']}x{roles}): {label} "
+                    f"{pct(base5[metric])} → {pct(c['plus'][5][metric])}"
+                )
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, self._lever_detail_text(c, base))
+            self.lever_list.addItem(item)
+
+    @staticmethod
+    def _lever_detail_text(c: dict, base: dict) -> str:
+        """Volle Was-wäre-wenn-Aufschlüsselung einer Karte (beide
+        Richtungen, beide Handgrößen, Starter/Handtrap/Brick)."""
+        roles = " [" + ", ".join(ROLE_DE[r] for r in c["roles"]) + "]" \
+            if c["roles"] else ""
+        lines = [f"{c['name']} ({c['copies']}x{roles})"]
+        for sign, vals in (("+1", c["plus"]), ("−1", c["minus"])):
+            if vals is None:
+                lines.append(f"{sign}: nicht möglich (3-Kopien-Limit)")
+                continue
+            for hand in sorted(vals):
+                b, v = base[hand], vals[hand]
+                lines.append(
+                    f"{sign} · Hand {hand}:  "
+                    f"Starter {pct(b['starter'])} → {pct(v['starter'])}  ·  "
+                    f"Handtrap {pct(b['handtrap'])} → {pct(v['handtrap'])}  ·  "
+                    f"Brick {pct(1 - b['starter'])} → {pct(1 - v['starter'])}"
+                )
+        return "\n".join(lines)
+
+    def _show_lever_detail(self, current: QListWidgetItem, _previous=None) -> None:
+        if current is None:
+            self.lever_detail.setText("")
+            return
+        self.lever_detail.setText(current.data(Qt.ItemDataRole.UserRole) or "")
 
     def _open_line(self, item: QListWidgetItem) -> None:
         """Doppelklick auf eine Linie: zur Kombo im Kombos-Reiter springen."""
