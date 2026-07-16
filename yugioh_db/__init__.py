@@ -14,6 +14,9 @@ Stueck ab, ohne dass sich fuer Aufrufer ein Name aendert.
 from .schema import *  # noqa: F401,F403
 from .api import *  # noqa: F401,F403
 from .updates import *  # noqa: F401,F403
+from .cards import *  # noqa: F401,F403
+from .collection import *  # noqa: F401,F403
+from .decks import *  # noqa: F401,F403
 from ._monolith import *  # noqa: F401,F403 -- restliche API (schrumpft)
 # Von der GUI genutzte Verbindungs-Helfer (Unterstrich-Namen deckt der
 # Stern-Import nicht ab).
