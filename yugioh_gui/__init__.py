@@ -5,9 +5,20 @@ PySide6-Oberflaeche der Yu-Gi-Oh-App als Paket (einzige externe
 Abhaengigkeit: PySide6; die Datenschicht yugioh_db bleibt stdlib-only).
 
 Fassade: re-exportiert die Einstiegspunkte (main, MainWindow,
-apply_theme). Waehrend der schrittweisen Aufteilung liegt die
-Implementierung in _monolith; die Modul-Schnitte (theme, views, ...)
-loesen ihn Stueck fuer Stueck ab. App-Start: start_app.py im Root.
+apply_theme). App-Start: start_app.py im Repo-Root.
+
+Module (Abhaengigkeiten fliessen einbahnig zu den Blaettern):
+
+    theme / labels / tasks / images / exporting / repository -- Blaetter
+    carddetail  -- DetailPanel, CardDetailDialog, CardSearchDialog (geteilt)
+    collection / deck / deck_dialogs / combos / playtest / manual -- Tabs
+    mainwindow  -- Kompositionswurzel (verdrahtet Views per Callbacks)
+    app         -- main(): QApplication, QSettings-Identitaet, Theme
+
+Views importieren einander nie -- Querbezuege laufen ueber Callbacks,
+die MainWindow setzt.
 """
 
-from ._monolith import MainWindow, apply_theme, main  # noqa: F401
+from .app import main  # noqa: F401
+from .mainwindow import MainWindow  # noqa: F401
+from .theme import apply_theme  # noqa: F401
