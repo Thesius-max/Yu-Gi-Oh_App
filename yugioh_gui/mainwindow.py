@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
                 self, "Datenbank fehlt",
                 "Keine Datenbank gefunden.\n\n"
                 "Anlegen über das Menü 'Daten → Kartendaten aktualisieren'\n"
-                "oder per Kommandozeile:  python yugioh_db.py build",
+                "oder per Kommandozeile:  python -m yugioh_db build",
             )
         self._loading = False
         self.search()

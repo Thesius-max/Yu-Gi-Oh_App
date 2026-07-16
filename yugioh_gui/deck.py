@@ -409,7 +409,7 @@ class DeckView(QWidget):
             QMessageBox.warning(
                 self, "Import fehlgeschlagen",
                 "Keine der Karten wurde in der Datenbank gefunden. "
-                "Eventuell hilft ein Daten-Update (yugioh_db.py build).",
+                "Eventuell hilft ein Daten-Update (python -m yugioh_db build).",
             )
             return
         lines = import_report_lines(report)

@@ -62,14 +62,14 @@ pip install -r requirements.txt
 
 ```bash
 # Einmalig die Kartendatenbank laden (benötigt eine Internetverbindung)
-python yugioh_db.py build
+python -m yugioh_db build
 
 # Anwendung starten
-python yugioh_gui.py
+python start_app.py
 ```
 
 `build` legt die Datei `yugioh.sqlite3` im aktuellen Verzeichnis an. Mit
-`python yugioh_db.py check` lässt sich später günstig prüfen, ob die API eine
+`python -m yugioh_db check` lässt sich später günstig prüfen, ob die API eine
 neuere Datenbankversion bereitstellt. Beides geht alternativ direkt in der
 App über das Menü **„Daten"** – auch die Erstanlage, falls noch keine
 Datenbank existiert.
@@ -112,7 +112,7 @@ dort liegen anschließend Sammlung, Decks, Kombos und Bilder.
 
 ```bash
 pip install pyinstaller
-python yugioh_db.py build seed.sqlite3   # einmalig die Seed-DB erzeugen
+python -m yugioh_db build seed.sqlite3   # einmalig die Seed-DB erzeugen
 python build_app.py                      # Bundle nach dist/YugiohSammlung/
 ```
 
@@ -138,7 +138,7 @@ App erfordert unter macOS Rechtsklick → „Öffnen" (Details in
 
 Eine Version = ein Release = drei ZIPs. Das Release-Ritual:
 
-1. `APP_VERSION` in `yugioh_db.py` hochzählen und committen.
+1. `APP_VERSION` in `yugioh_db/updates.py` hochzählen und committen.
 2. Tag mit derselben Nummer pushen: `git tag v0.2.0 && git push origin v0.2.0`.
 3. Die CI baut alle drei Bundles und hängt sie ans GitHub-Release;
    Release-Notes auf GitHub ergänzen (erscheinen im Update-Hinweis der App).
@@ -153,9 +153,12 @@ Start einer neuen Version automatisch eine Sicherung der Datenbank an
 ## Projektstruktur
 
 ```
-yugioh_db.py         Datenschicht: API-Abruf, SQLite-Schema, Suche, Sammlung,
-                     Decks und Kombos (nur Standardbibliothek)
-yugioh_gui.py        PySide6-Oberfläche mit den vier Tabs
+start_app.py         Startet die App (auch PyInstaller-Einstieg)
+yugioh_db/           Datenschicht als Paket: API-Abruf, SQLite-Schema, Suche,
+                     Sammlung, Decks, Kombos, Analyse, Exporte (nur
+                     Standardbibliothek; CLI: python -m yugioh_db)
+yugioh_gui/          PySide6-Oberfläche als Paket: je Tab ein Modul, dazu
+                     Theme, Bild-Cache, Labels und das Hauptfenster
 test_yugioh_db.py    unittest-Suite für die Datenschicht
 build_app.py         Erzeugt das verteilbare PyInstaller-Bundle
 TESTER_LIESMICH.txt  Anleitung, die mit ins Tester-Bundle gelegt wird
