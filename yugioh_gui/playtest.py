@@ -8,7 +8,6 @@ als Kombo mit Heimat-Deck). Der Spielzustand lebt nur in der GUI.
 
 from __future__ import annotations
 
-import itertools
 import random
 
 from PySide6.QtCore import QPoint, QThreadPool, QTimer, Qt, Signal
@@ -29,6 +28,7 @@ from .images import (
     IMAGE_URL, card_back_pixmap, lookup_card_pixmap, placeholder_pixmap,
     scale_pixmap
 )
+from ._cardinst import _CardInst
 from .repository import CardRepository
 from .tasks import ImageLoader, ImageSignals
 
@@ -39,28 +39,6 @@ from .tasks import ImageLoader, ImageSignals
 
 _CARD_W, _CARD_H = 74, 106     # Brettkarten-Groesse (aufrecht)
 _ZONE_W = _ZONE_H = 120        # Zelle: fasst Karte aufrecht UND um 90° gedreht
-
-
-
-
-class _CardInst:
-    """Eine Karte auf dem Brett/Hand: Identitaet + Zustand (offen/verdeckt,
-    ATK/DEF). Jede Kopie ist ein eigenes Exemplar; 'uid' identifiziert es
-    stabil ueber Undo-Snapshots hinweg (der Kombo-Recorder zaehlt darueber
-    benutzte Exemplare). 'origin' merkt sich beim Aufnehmen aus einem Stapel
-    die Herkunft (ED/GY/…) bis zum Ablegen — daraus wird 'SS <X> (<Ort>)'."""
-    __slots__ = ("card_id", "name", "face_down", "defense", "uid", "origin")
-    _uid_counter = itertools.count(1)
-
-    def __init__(self, card_id: int, name: str,
-                 face_down: bool = False, defense: bool = False,
-                 uid: int | None = None, origin: str | None = None):
-        self.card_id = card_id
-        self.name = name
-        self.face_down = face_down
-        self.defense = defense
-        self.uid = next(self._uid_counter) if uid is None else uid
-        self.origin = origin
 
 
 class _BoardCard(QLabel):
@@ -480,9 +458,7 @@ class PlayTestView(QWidget):
 
     @staticmethod
     def _snap_inst(c: _CardInst | None):
-        return None if c is None else (
-            c.card_id, c.name, c.face_down, c.defense, c.uid, c.origin
-        )
+        return None if c is None else c.to_tuple()
 
     def _push_undo(self) -> None:
         """Kompletten Spielzustand als wertbasierten Snapshot sichern (die
@@ -510,18 +486,15 @@ class PlayTestView(QWidget):
             return
         s = self._undo.pop()
 
-        def mk(t):
-            return None if t is None else _CardInst(*t)
-
         self._deck = list(s["deck"])
         self._extra = list(s["extra"])
-        self._hand = [mk(t) for t in s["hand"]]
-        self._mzones = [mk(t) for t in s["m"]]
-        self._szones = [mk(t) for t in s["s"]]
-        self._emz = [mk(t) for t in s["e"]]
-        self._field = mk(s["field"])
-        self._gy = [mk(t) for t in s["gy"]]
-        self._banished = [mk(t) for t in s["ban"]]
+        self._hand = [_CardInst.from_tuple(t) for t in s["hand"]]
+        self._mzones = [_CardInst.from_tuple(t) for t in s["m"]]
+        self._szones = [_CardInst.from_tuple(t) for t in s["s"]]
+        self._emz = [_CardInst.from_tuple(t) for t in s["e"]]
+        self._field = _CardInst.from_tuple(s["field"])
+        self._gy = [_CardInst.from_tuple(t) for t in s["gy"]]
+        self._banished = [_CardInst.from_tuple(t) for t in s["ban"]]
         (self._recording, self._rec_log, self._rec_used,
          self._rec_ns_used, self._rec_last_ed, self._rec_start) = s["rec"]
         self._held = None
