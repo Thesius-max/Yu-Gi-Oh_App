@@ -517,4 +517,5 @@ class MainWindow(QMainWindow):
         self.search()
         self.collection_view.refresh()
         self.deck_view.refresh()
+        self.playtest_view.refresh()
         self.combo_view.refresh()

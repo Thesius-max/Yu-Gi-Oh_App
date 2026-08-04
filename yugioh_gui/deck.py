@@ -495,6 +495,7 @@ class DeckView(QWidget):
             self._refresh_consistency()
             self._refresh_plan()
             self._refresh_combos()
+            self._refresh_suggestions()
             self._refresh_simulator()
             self._refresh_leverage()
             return

@@ -527,9 +527,12 @@ class PlayTestView(QWidget):
         'SS (<Ort>)' für aufgenommene Stapel-Karten, sonst die NS/SS-
         Heuristik (die erste Handbeschwörung der Aufzeichnung ist NS —
         eine pro Zug —, alle weiteren SS)."""
+        # Herkunft immer beim Ablegen verbrauchen -- auch ohne laufende
+        # Aufzeichnung, sonst klebt sie am Exemplar und eine spaetere
+        # Aufzeichnung protokolliert faelschlich 'SS <X> (GY/ED/...)'.
+        src, inst.origin = inst.origin, None
         if not self._recording:
             return
-        src, inst.origin = inst.origin, None
         if zone_key == "field" or zone_key.startswith("s"):
             kw = "Set" if inst.face_down else "Act"
             where = f" ({src})" if src else ""

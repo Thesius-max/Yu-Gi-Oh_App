@@ -33,13 +33,14 @@ und pflegt eine eigene **Kombo-Bibliothek**. Sie läuft eigenständig auf deinem
 Rechner; die Kartendaten werden einmalig aus dem Internet geladen und danach
 lokal gehalten — **danach arbeitet die App offline**.
 
-## Die fünf Tabs
+## Die sechs Tabs
 
 | Tab | Wofür |
 |---|---|
 | **Suche** | Karten finden, Details ansehen, in Sammlung/Deck/Kombo übernehmen |
 | **Sammlung** | dein physischer Kartenbestand |
 | **Deck** | Decks bauen, prüfen, importieren/exportieren, Kombo-Hilfe |
+| **Spielfeld** | Decks solo testen (Goldfishing), Züge als Kombo aufzeichnen |
 | **Kombos** | Kombo-Linien dokumentieren (Bausteine, Rollen, Schritte) |
 | **Handbuch** | diese Hilfe |
 
