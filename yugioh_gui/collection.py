@@ -18,7 +18,7 @@ import yugioh_db as ydb
 
 from .carddetail import CardDetailDialog
 from .exporting import resolve_export_path, write_text_file, write_text_pdf
-from .images import HoverCardPreview
+from .images import HoverCardPreview, pos_over_item_text
 from .labels import ATTR_DE, CATEGORY_DE, CATEGORY_ORDER, COLLECTION_CARD_ID
 from .repository import CardRepository
 from .theme import GROUP_HEADER_BG, GROUP_HEADER_FG, UNTRANSLATED_FG
@@ -139,13 +139,16 @@ class CollectionView(QWidget):
         self.refresh()
 
     def _hover_card_id(self, pos):
-        """card_id der Tabellenzeile unter 'pos' (Viewport-Koord.) oder None
-        bei Gruppen-Kopfzeilen/Leerraum -- speist die Hover-Bildvorschau."""
+        """card_id, wenn 'pos' (Viewport-Koord.) auf dem Namenstext einer
+        Datenzeile liegt; None bei Gruppen-Kopfzeilen, anderen Spalten und
+        Leerraum -- speist die Hover-Bildvorschau."""
         row = self.table.rowAt(pos.y())
         if row < 0:
             return None
         item = self.table.item(row, 0)
-        return item.data(COLLECTION_CARD_ID) if item else None
+        if item is None or not pos_over_item_text(self.table, item, pos):
+            return None
+        return item.data(COLLECTION_CARD_ID)
 
     def _open_detail(self, row: int, col: int) -> None:
         """Detail-Pop-up der Karte in 'row' oeffnen; Gruppen-Kopfzeilen

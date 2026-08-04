@@ -24,7 +24,7 @@ from .deck_dialogs import (
     ComboFromDeckDialog, DeckCorpusDiffDialog, ReferenceDeckDialog
 )
 from .exporting import resolve_export_path, write_text_file, write_text_pdf
-from .images import HoverCardPreview
+from .images import HoverCardPreview, pos_over_item_text
 from .labels import (
     CATEGORY_DE, CATEGORY_ORDER, ROLE_DE, SIM_COPIES_DATA, ZONE_LABELS,
     import_report_lines, pct
@@ -84,10 +84,13 @@ class ZonePanel(QGroupBox):
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
     def _hover_card_id(self, pos):
-        """card_id der Karte unter 'pos' (Viewport-Koord.) oder None bei
-        Gruppen-Kopfzeilen/Leerraum -- speist die Hover-Bildvorschau."""
+        """card_id, wenn 'pos' (Viewport-Koord.) auf dem Namenstext einer
+        Karte liegt; None bei Gruppen-Kopfzeilen und Leerraum (auch rechts
+        vom Text) -- speist die Hover-Bildvorschau."""
         item = self.list.itemAt(pos)
-        return item.data(Qt.ItemDataRole.UserRole) if item else None
+        if item is None or not pos_over_item_text(self.list, item, pos):
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
 
     def _on_double_click(self, item) -> None:
         """Detail-Pop-up der Karte oeffnen; Gruppen-Kopfzeilen (ohne card_id)

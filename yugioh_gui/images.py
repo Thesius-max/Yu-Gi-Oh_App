@@ -94,6 +94,18 @@ class CardImageView:
             self.image.setText("(Bild offline nicht verfügbar)")
 
 
+def pos_over_item_text(view, item, pos) -> bool:
+    """True, wenn 'pos' (Viewport-Koord.) horizontal auf dem gerenderten
+    Text von 'item' liegt -- nicht im Leerraum rechts davon. Fuer die
+    Hover-Resolver von QTableWidget/QListWidget (beide haben
+    visualItemRect); die Y-Pruefung erledigt dort schon der Item-Treffer."""
+    rect = view.visualItemRect(item)
+    pad = 8  # Zell-Padding links + etwas Toleranz am Textende
+    text_w = view.fontMetrics().horizontalAdvance(item.text())
+    right = min(rect.left() + pad + text_w, rect.right())
+    return rect.left() <= pos.x() <= right
+
+
 class HoverCardPreview(QObject):
     """Schwebende Kartenbild-Vorschau fuer Item-Views (QListWidget/
     QTableWidget). Faehrt die Maus ueber eine Zeile mit zugeordneter Karte,
