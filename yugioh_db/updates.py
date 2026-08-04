@@ -23,7 +23,7 @@ from .schema import DEFAULT_DB, _conn
 # App-Version: eine Nummer fuer alle Plattform-Builds (Windows + macOS).
 # Release-Ritual: hochzaehlen -> committen -> Tag "v<version>" pushen; die CI
 # baut dann alle drei ZIPs und haengt sie an EIN gemeinsames GitHub-Release.
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 RELEASES_API_URL = (
     "https://api.github.com/repos/Thesius-max/Yu-Gi-Oh_App/releases/latest"
 )
