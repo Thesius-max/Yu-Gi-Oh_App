@@ -30,8 +30,11 @@ COMBO_ROLES = ("starter", "extender", "payoff", "handtrap")
 # Erlaubte Aktions-Keywords am Zeilenanfang:
 COMBO_STEP_KEYWORDS = (
     "NS", "SS", "Act", "Eff", "Eff1", "Eff2", "Add", "Send", "Banish",
-    "Mill", "Draw", "Discard", "Set", "Synchro:",
+    "Mill", "Draw", "Discard", "Set",
+    "Synchro:", "Xyz:", "Link:", "Fusion:",
 )
+# Beschwoerungsformeln: eigene Zeile, '<Art>: A + B -> Ziel'.
+_FORMULA_KEYWORDS = ("synchro", "xyz", "link", "fusion")
 
 
 def lint_combo_steps(steps: Iterable[str]) -> list[str]:
@@ -43,12 +46,13 @@ def lint_combo_steps(steps: Iterable[str]) -> list[str]:
     for no, text in enumerate(steps, start=1):
         problems: list[str] = []
         tokens = text.split()
-        first = tokens[0].rstrip(":").lower() if tokens else ""
+        raw_first = tokens[0].lower() if tokens else ""
+        first = raw_first.rstrip(":")
         if first not in allowed:
             problems.append(
                 "beginnt nicht mit einem Notation-Keyword "
                 "(NS, SS, Act, Eff/Eff1/Eff2, Add, Send, Banish, Mill, "
-                "Draw, Discard, Set, Synchro:)"
+                "Draw, Discard, Set, Synchro:/Xyz:/Link:/Fusion:)"
             )
         head, *locks = (seg.strip() for seg in text.split("|"))
         for seg in locks:
@@ -64,16 +68,21 @@ def lint_combo_steps(steps: Iterable[str]) -> list[str]:
                         "reserviert: [Req: ...]"
                     )
         lowered = head.lower()
-        if lowered.startswith("synchro:"):
-            if "+" not in head or "->" not in head:
+        if first in _FORMULA_KEYWORDS:
+            kind = tokens[0].rstrip(":")
+            if not raw_first.endswith(":"):
+                problems.append(
+                    f"Formel braucht einen Doppelpunkt: '{kind}: A + B -> Ziel'"
+                )
+            elif "+" not in head or "->" not in head:
                 problems.append(
                     "Formel unvollstaendig -- erwartet: "
-                    "Synchro: Tuner (Lvl) + Non-Tuner (Lvl) -> Ziel (Lvl)"
+                    f"{kind}: Material + Material -> Ziel"
                 )
-        elif "synchro:" in lowered:
+        elif any(f"{k}:" in lowered for k in _FORMULA_KEYWORDS):
             problems.append(
-                "Beschwoerungsformeln ('Synchro: ...') bekommen eine "
-                "eigene Zeile"
+                "Beschwoerungsformeln ('Synchro:/Xyz:/Link:/Fusion: ...') "
+                "bekommen eine eigene Zeile"
             )
         warnings.extend(f"Schritt {no}: {p}" for p in problems)
     return warnings
@@ -203,6 +212,20 @@ def combo_variants(db_path: str, combo_id: int) -> list[sqlite3.Row]:
             "WHERE parent_combo_id = ? ORDER BY name",
             (combo_id,),
         ).fetchall()
+
+
+def combo_variants_by_parent(db_path: str) -> dict[int, list[sqlite3.Row]]:
+    """Alle Varianten, gruppiert nach Hauptlinie (je Gruppe nach Name) --
+    eine Abfrage statt combo_variants() je Hauptlinie (Listenaufbau)."""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT combo_id, name, archetype, parent_combo_id FROM combos "
+            "WHERE parent_combo_id IS NOT NULL ORDER BY name"
+        ).fetchall()
+    out: dict[int, list[sqlite3.Row]] = {}
+    for r in rows:
+        out.setdefault(r["parent_combo_id"], []).append(r)
+    return out
 
 
 def update_combo(

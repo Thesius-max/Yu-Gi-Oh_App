@@ -50,7 +50,7 @@ Nur `<AKTION> <Karte>` ist Pflicht, alles andere nach Bedarf.
 | `Banish` | verbannen |
 | `Mill` | oberste Karte(n) vom Deck in den GY |
 | `Draw` / `Discard` / `Set` | ziehen / abwerfen / setzen |
-| `Synchro:` | Synchrobeschwörung (Formel, siehe unten) |
+| `Synchro:` / `Xyz:` / `Link:` / `Fusion:` | Beschwörung per Formel (siehe unten) |
 | `Req:` | Voraussetzung des Schritts (in `[…]`) |
 | `Lock:` | Einschränkung/Lock (nach `|`) |
 
@@ -66,10 +66,14 @@ Nur `<AKTION> <Karte>` ist Pflicht, alles andere nach Bedarf.
 
 ## Beschwörungsformel
 
-Eigene Zeile, Tuner zuerst, Level in Klammern:
+Eigene Zeile, Materialien mit `+`, Ergebnis nach `->`. Bei Synchro
+Tuner zuerst, Level/Rang/Link-Wert in Klammern:
 
 ```
 Synchro: <Tuner> (<Lvl>) + <Non-Tuner> (<Lvl>) -> <Ziel> (<Lvl>)
+Xyz: <Material> (<Lvl>) + <Material> (<Lvl>) -> <Ziel> (R<Rang>)
+Link: <Material> + <Material> -> <Ziel> (L<Wert>)
+Fusion: <Material> + <Material> -> <Ziel>
 ```
 
 ## Notizen-Feld der Kombo

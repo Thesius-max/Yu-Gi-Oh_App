@@ -100,6 +100,9 @@ class ZonePanel(QGroupBox):
             self.owner.open_card_detail(card_id)
 
     def populate(self, rows, shortages: dict[int, int] | None = None) -> int:
+        # Auswahl ueber den Neuaufbau retten -- sonst muss man die Karte nach
+        # jedem +1/-1 neu anklicken.
+        keep = self.selected_card_id()
         self.list.clear()
         self._shortages = shortages or {}
         total = sum(r["quantity"] for r in rows)
@@ -121,6 +124,11 @@ class ZonePanel(QGroupBox):
         else:
             for r in rows:
                 self._add_card_item(r)
+        if keep is not None:
+            for i in range(self.list.count()):
+                if self.list.item(i).data(Qt.ItemDataRole.UserRole) == keep:
+                    self.list.setCurrentRow(i)
+                    break
         return total
 
     def _add_card_item(self, r) -> None:
@@ -373,6 +381,7 @@ class DeckView(QWidget):
         if not self.repo.exists():
             return
         ReferenceDeckDialog(self.repo, self).exec()
+        self.refresh()  # Korpus speist Vorschlaege und Vergleich
 
     def _open_corpus_diff(self) -> None:
         """Aktuelles Deck gegen eine Korpus-/Referenz-Liste vergleichen."""
@@ -755,10 +764,15 @@ class DeckView(QWidget):
             return
         res = ydb.deck_suggestions(self.repo.db_path, self.deck_id)
         gap = res["gap_role"]
-        copies = res["role_copies"].get(gap, 0)
-        self.gap_label.setText(
-            f"Engpass: {ROLE_DE[gap]} ({copies} Kopien im Main Deck)"
-        )
+        if gap is None:
+            self.gap_label.setText(
+                "Engpass: unbekannt — noch keine Deck-Karte hat eine Rolle."
+            )
+        else:
+            copies = res["role_copies"].get(gap, 0)
+            self.gap_label.setText(
+                f"Engpass: {ROLE_DE[gap]} ({copies} Kopien in Main + Extra)"
+            )
         if not res["suggestions"]:
             self._add_plan_note(
                 self.suggestion_list,
@@ -770,7 +784,7 @@ class DeckView(QWidget):
         fills_gap = [s for s in res["suggestions"] if gap in s["roles"]]
         others = [s for s in res["suggestions"] if gap not in s["roles"]]
         for header, group in (
-            (f"Füllt die Lücke: {ROLE_DE[gap]}", fills_gap),
+            (f"Füllt die Lücke: {ROLE_DE.get(gap, '')}", fills_gap),
             ("Weitere Vorschläge", others),
         ):
             if not group:
@@ -889,7 +903,13 @@ class DeckView(QWidget):
             self.sim_verdict.setText("✗ Brick: kein Starter in dieser Hand.")
 
     def _refresh_simulator(self) -> None:
-        """Picker aus dem Main Deck neu befüllen; Auswahl/Hand zurücksetzen."""
+        """Picker aus dem Main Deck neu befüllen; Häkchen bleiben erhalten,
+        soweit die Karten noch im Main Deck liegen; die Hand wird geleert."""
+        checked = {
+            self.sim_cards.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.sim_cards.count())
+            if self.sim_cards.item(i).checkState() == Qt.CheckState.Checked
+        }
         self.sim_cards.blockSignals(True)
         self.sim_cards.clear()
         self.sim_hand.clear()
@@ -906,7 +926,10 @@ class DeckView(QWidget):
                 label += "  [" + ", ".join(ROLE_DE[r] for r in c["roles"]) + "]"
             it = QListWidgetItem(label)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Unchecked)
+            it.setCheckState(
+                Qt.CheckState.Checked if c["card_id"] in checked
+                else Qt.CheckState.Unchecked
+            )
             it.setData(Qt.ItemDataRole.UserRole, c["card_id"])
             it.setData(SIM_COPIES_DATA, c["copies"])
             self.sim_cards.addItem(it)
@@ -915,6 +938,8 @@ class DeckView(QWidget):
         self._recompute_prob()
 
     def _refresh_combos(self) -> None:
+        current = self.combo_list.currentItem()
+        keep = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.combo_list.clear()
         self.combo_pieces.clear()
         self.combo_steps.clear()
@@ -928,6 +953,8 @@ class DeckView(QWidget):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, c["combo_id"])
             self.combo_list.addItem(item)
+        if keep is not None:
+            self._select_combo(keep)
 
     def _on_combo_selected(self, current: QListWidgetItem, _previous=None) -> None:
         self.combo_pieces.clear()
@@ -963,13 +990,21 @@ class DeckView(QWidget):
             return
         combo_id = item.data(Qt.ItemDataRole.UserRole)
         cov = ydb.combo_coverage(self.repo.db_path, combo_id, self.deck_id)
+        problems = []
         for p in cov["pieces"]:
             if p["missing"] > 0:
-                ydb.add_card_to_deck(
+                added, msg = ydb.add_card_to_deck(
                     self.repo.db_path, self.deck_id, p["card_id"], count=p["missing"]
                 )
+                if added < p["missing"]:
+                    problems.append(f"{p['name']}: {msg}")
         self.refresh()
         self._select_combo(combo_id)
+        if problems:
+            QMessageBox.information(
+                self, "Nicht alle Bausteine hinzugefügt",
+                "\n".join(problems),
+            )
 
     def _new_combo_from_deck(self) -> None:
         """Kombo mit diesem Deck als Heimat-Deck anlegen; Bausteine kommen
@@ -1015,13 +1050,7 @@ class DeckView(QWidget):
         cid = self.panels["side"].selected_card_id()
         if cid is None or self.deck_id is None:
             return
-        conn = ydb._connect(self.repo.db_path)
-        try:
-            card = conn.execute(
-                "SELECT type, frame_type FROM cards WHERE id = ?", (cid,)
-            ).fetchone()
-        finally:
-            conn.close()
+        card = self.repo.get_card(cid)
         if card is None:
             return
         natural = ydb.deck_zone_for(card["frame_type"], card["type"])

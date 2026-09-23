@@ -800,6 +800,80 @@ class DbTests(unittest.TestCase):
             conn.close()
         self.assertIn("format_date", cols)
 
+    # -- Vorschlaege / Was-waere-wenn (Paket C) ---------------------------
+
+    def _real_ids(self, where: str, n: int) -> list[int]:
+        conn = sqlite3.connect(self.db)
+        try:
+            return [r[0] for r in conn.execute(
+                f"SELECT id FROM cards WHERE {where} LIMIT ?", (n,)
+            )]
+        finally:
+            conn.close()
+
+    def test_gap_role_counts_extra_deck_payoffs(self):
+        deck = ydb.create_deck(self.db, "T")
+        starter = self.main_id
+        ydb.add_card_to_deck(self.db, deck, starter, count=3)
+        ydb.add_card_to_deck(self.db, deck, self.extra_id, count=2)
+        combo = ydb.create_combo(self.db, "K")
+        for cid, role in ((starter, "starter"), (self.extra_id, "payoff")):
+            ydb.add_combo_card(self.db, combo, cid, 1)
+            ydb.set_combo_card_role(self.db, combo, cid, role)
+        res = ydb.deck_suggestions(self.db, deck)
+        self.assertEqual(res["role_copies"]["payoff"], 2)
+        self.assertNotEqual(res["gap_role"], "payoff")
+
+    def test_gap_role_none_without_roles(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, count=1)
+        self.assertIsNone(ydb.deck_suggestions(self.db, deck)["gap_role"])
+
+    def test_combo_siblings_are_not_bridges(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, count=1)
+        others = self._real_ids(
+            f"frame_type = 'effect' AND id != {self.main_id} AND id NOT IN "
+            "(SELECT card_id FROM combo_cards)", 4)
+        combo = ydb.create_combo(self.db, "K")
+        for cid in [self.main_id, *others]:
+            ydb.add_combo_card(self.db, combo, cid, 1)
+        scores = {
+            s["card_id"]: s for s in ydb.deck_suggestions(self.db, deck, limit=500)[
+                "suggestions"] if s["card_id"] in others
+        }
+        for cid in others:
+            self.assertEqual(scores[cid]["bridges"], [])
+            self.assertAlmostEqual(scores[cid]["score"] - self._corpus(scores[cid]), 1.0)
+
+    @staticmethod
+    def _corpus(s):
+        return ydb.analysis._CORPUS_WEIGHT * sum(l["weight"] for l in s["corpus"])
+
+    def test_what_if_plus_respects_side_copies(self):
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="main", count=2)
+        ydb.add_card_to_deck(self.db, deck, self.main_id, zone="side", count=1)
+        card = next(c for c in ydb.deck_what_if(self.db, deck)["cards"]
+                    if c["card_id"] == self.main_id)
+        self.assertIsNone(card["plus"])
+
+    def test_combo_variants_by_parent(self):
+        a = ydb.create_combo(self.db, "A")
+        v2 = ydb.create_combo(self.db, "Z-Var")
+        v1 = ydb.create_combo(self.db, "B-Var")
+        for v in (v2, v1):
+            ydb.set_combo_parent(self.db, v, a)
+        grouped = ydb.combo_variants_by_parent(self.db)
+        self.assertEqual([r["combo_id"] for r in grouped[a]], [v1, v2])
+
+    def test_lint_formula_keywords(self):
+        ok = ["Xyz: A (4) + B (4) -> C (R4)", "Link: A + B -> C (L2)",
+              "Fusion: A + B -> C"]
+        self.assertEqual(ydb.lint_combo_steps(ok), [])
+        self.assertTrue(ydb.lint_combo_steps(["Synchro Soul + Bone"]))
+        self.assertTrue(ydb.lint_combo_steps(["NS X -> Xyz: A + B -> C"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

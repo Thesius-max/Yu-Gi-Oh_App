@@ -44,6 +44,7 @@ Beschwörungsformeln bekommen immer eine eigene Zeile (Tuner zuerst):
 
 ```
 Synchro: Soul (2) + Bone (4) -> Red Rising (6)
+Xyz: A (4) + B (4) -> Ziel (R4)      Link: A + B -> Ziel (L2)
 ```
 
 - `->` verkettet Kosten → Wirkung → Resultat
@@ -64,6 +65,7 @@ Synchro: Soul (2) + Bone (4) -> Red Rising (6)
 | Add | auf die Hand nehmen (Suche) |
 | Send / Banish / Mill | verschieben / verbannen / Deck → GY |
 | Draw / Discard / Set | ziehen / abwerfen / setzen |
+| Synchro: / Xyz: / Link: / Fusion: | Beschwörungsformel (eigene Zeile) |
 | GY / ED | Graveyard / Extra Deck |
 | Lvl | Level, z. B. `Lvl ≤4` |
 
@@ -348,19 +350,24 @@ class ComboView(QWidget):
         self._reload_deck_filter()
         self.combo_list.blockSignals(True)
         self.combo_list.clear()
-        combos = (
-            ydb.list_combos(
-                self.repo.db_path, self.deck_filter_cb.currentData(),
+        combos, coverage, variants = [], {}, {}
+        if self.repo.exists():
+            db = self.repo.db_path
+            combos = ydb.list_combos(
+                db, self.deck_filter_cb.currentData(),
                 text=self.search_edit.text(),
             )
-            if self.repo.exists() else []
-        )
+            # Gebuendelt statt je Kombo (frueher 2 Verbindungen pro Zeile).
+            coverage = {c["combo_id"]: c for c in ydb.combos_for_collection(db)}
+            variants = ydb.combo_variants_by_parent(db)
         for c in combos:
-            item = QListWidgetItem(self._combo_label(c))
+            item = QListWidgetItem(
+                self._combo_label(c, coverage.get(c["combo_id"]))
+            )
             item.setData(Qt.ItemDataRole.UserRole, c["combo_id"])
             self.combo_list.addItem(item)
             # Varianten (Branches) eingerückt direkt unter der Hauptlinie.
-            for v in ydb.combo_variants(self.repo.db_path, c["combo_id"]):
+            for v in variants.get(c["combo_id"], []):
                 vitem = QListWidgetItem(self._variant_label(v))
                 vitem.setData(Qt.ItemDataRole.UserRole, v["combo_id"])
                 self.combo_list.addItem(vitem)
@@ -402,12 +409,16 @@ class ComboView(QWidget):
             self.refresh()
             self._select_combo(combo_id)
 
-    def _combo_label(self, combo) -> str:
+    def _combo_label(self, combo, cov=None) -> str:
         """Listentext einer Kombo inkl. Heimat-Deck und Baubarkeit aus der
-        Sammlung (✓ = vollständig baubar, sonst 'vorhanden/gesamt')."""
+        Sammlung (✓ = vollständig baubar, sonst 'vorhanden/gesamt'). 'cov'
+        (covered/total) kann vorab gebündelt geliefert werden."""
         arch = f"   [{combo['archetype']}]" if combo["archetype"] else ""
         deck = f"   · {combo['deck_name']}" if combo["deck_name"] else ""
-        cov = ydb.combo_coverage_collection(self.repo.db_path, combo["combo_id"])
+        if cov is None:
+            cov = ydb.combo_coverage_collection(
+                self.repo.db_path, combo["combo_id"]
+            )
         if cov["total"] == 0:
             mark = ""
         elif cov["covered"] == cov["total"]:
@@ -436,12 +447,14 @@ class ComboView(QWidget):
         if item is None or self.combo_id is None:
             return
         combo = ydb.get_combo(self.repo.db_path, self.combo_id)
-        if combo is None:
-            return
+        if combo is not None:
+            item.setText(self._list_label(combo))
+
+    def _list_label(self, combo) -> str:
+        """Listentext passend zur Stufe: Variante eingerückt, sonst Hauptlinie."""
         if combo["parent_combo_id"] is not None:
-            item.setText(self._variant_label(combo))
-        else:
-            item.setText(self._combo_label(combo))
+            return self._variant_label(combo)
+        return self._combo_label(combo)
 
     def _refresh_collection_coverage(self) -> None:
         """Zeigt, welche Bausteine der aktiven Kombo schon im Bestand sind."""
@@ -750,7 +763,7 @@ class ComboView(QWidget):
             if item.data(Qt.ItemDataRole.UserRole) == combo_id:
                 combo = ydb.get_combo(self.repo.db_path, combo_id)
                 if combo is not None:
-                    item.setText(self._combo_label(combo))
+                    item.setText(self._list_label(combo))
                 break
 
     # -- Notation (Hilfe + beratende Pruefung) --------------------------------

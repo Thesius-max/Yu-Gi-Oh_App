@@ -16,7 +16,7 @@ import random
 import sqlite3
 from typing import Iterable, Optional
 
-from .combos import COMBO_ROLES
+from .combos import COMBO_ROLES, deck_role_summary
 from .decks import MAX_COPIES, deck_counts
 from .schema import _conn
 
@@ -126,7 +126,8 @@ def deck_what_if(
     exakt statt gefuehlt. Auch rollenlose Karten bewegen die Werte -- +1
     verduennt das Deck (Nenner waechst), -1 verdichtet es. Brick ist
     1 - Starter (rechnet der Aufrufer). 'plus' ist None, wenn die Karte
-    schon am 3-Kopien-Limit liegt (MAX_COPIES).
+    ueber alle Zonen (inkl. Side) schon am 3-Kopien-Limit liegt
+    (MAX_COPIES) -- wie add_card_to_deck es erzwingt.
 
     Rueckgabe: {'deck_size', 'base': {hand: {'starter', 'handtrap'}},
     'cards': [{'card_id', 'name', 'copies', 'roles',
@@ -152,10 +153,17 @@ def deck_what_if(
             out[r] = out.get(r, 0) + delta
         return out
 
+    with _conn(db_path) as conn:
+        totals = {
+            r["card_id"]: r["n"] for r in conn.execute(
+                "SELECT card_id, SUM(quantity) AS n FROM deck_cards "
+                "WHERE deck_id = ? GROUP BY card_id", (deck_id,)
+            )
+        }
     cards = []
     for c in deck_main_cards(db_path, deck_id):
         plus = None
-        if c["copies"] < MAX_COPIES:
+        if totals.get(c["card_id"], c["copies"]) < MAX_COPIES:
             plus = metrics(size + 1, shifted(c["roles"], +1))
         minus = metrics(size - 1, shifted(c["roles"], -1))
         cards.append({
@@ -400,8 +408,10 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     mit _CORPUS_WEIGHT ein -- Kombo-Kanten bleiben die praezise, hoeher
     gewichtete Quelle. Kandidaten sind nur Karten, die in KEINER Zone des
     Decks liegen. Die Luecken-Rolle (gap_role = Rolle mit den wenigsten
-    Kopien im Main Deck) manipuliert keine Scores, sie steuert nur die
-    Gruppierung in der Anzeige.
+    Kopien in Main + Extra -- Payoffs sind meist Extra-Deck-Bosse; None,
+    solange keine Deck-Karte eine Rolle traegt) manipuliert keine Scores,
+    sie steuert nur die Gruppierung in der Anzeige. role_copies zaehlt
+    entsprechend Main + Extra.
     Rueckgabe: {'gap_role', 'role_copies', 'suggestions': [{'card_id',
     'name', 'score', 'direct', 'bridges', 'roles', 'reasons',
     'corpus': [{'name', 'decks', 'weight'}, ...], 'corpus_total'}, ...]},
@@ -426,8 +436,10 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
     combo_members: dict[int, set[int]] = {}
     combo_names: dict[int, str] = {}
     roles: dict[int, set[str]] = {}
+    card_combos: dict[int, set[int]] = {}
     for r in combo_rows:
         combo_members.setdefault(r["combo_id"], set()).add(r["card_id"])
+        card_combos.setdefault(r["card_id"], set()).add(r["combo_id"])
         combo_names[r["combo_id"]] = r["combo_name"]
         if r["role"]:
             roles.setdefault(r["card_id"], set()).add(r["role"])
@@ -462,11 +474,21 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
         corpus_total = e["total"]
 
     candidates = (set(adj) | set(corpus_adj)) - in_deck_any
+
+    def bridges_deck_without(m: int, c: int) -> bool:
+        """m ist mit dem Deck ueber eine Kombo verbunden, die c NICHT
+        enthaelt -- sonst waere die 'Bruecke' nur ein Kombo-Geschwister
+        und die Evidenz steckt schon im Direkt-Score."""
+        return any(
+            c not in combo_members[k] and combo_members[k] & deck_set
+            for k in card_combos.get(m, ())
+        )
+
     bridges: dict[int, list[int]] = {}
     for c in candidates:
         bridges[c] = sorted(
             m for m in adj.get(c, ())
-            if m not in in_deck_any and adj.get(m, set()) & deck_set
+            if m not in in_deck_any and bridges_deck_without(m, c)
         )
 
     # Namen fuer Karten nachladen, die nur im Korpus vorkommen.
@@ -503,8 +525,15 @@ def deck_suggestions(db_path: str, deck_id: int, limit: int = 15) -> dict:
         })
     suggestions.sort(key=lambda s: (-s["score"], s["name"]))
 
-    role_copies = deck_role_copies(db_path, deck_id)
-    gap_role = min(COMBO_ROLES, key=lambda r: role_copies.get(r, 0))
+    summary = deck_role_summary(db_path, deck_id)
+    role_copies = {
+        r: sum(c["copies"] for c in cards) for r, cards in summary.items()
+        if cards
+    }
+    gap_role = (
+        min(COMBO_ROLES, key=lambda r: role_copies.get(r, 0))
+        if role_copies else None
+    )
     return {
         "gap_role": gap_role,
         "role_copies": role_copies,
