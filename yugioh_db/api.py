@@ -8,7 +8,10 @@ nur .schema (Basis-Schicht).
 
 from __future__ import annotations
 
+import html
 import json
+import os
+import sqlite3
 import urllib.request
 from pathlib import Path
 from typing import Iterable, Optional
@@ -60,13 +63,51 @@ def cache_image(card_id: int, image_url: str, image_dir: str = IMAGE_DIR) -> Pat
             image_url, headers={"User-Agent": "yugioh-tool/0.1"}
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
-            dest.write_bytes(resp.read())
+            data = resp.read()
+        # Atomar: erst .part, dann umbenennen -- ein Abbruch hinterlaesst
+        # nie eine halbe Datei, die exists() dauerhaft fuer gueltig haelt.
+        tmp = dest.with_name(f"{dest.name}.{os.getpid()}.part")
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)
     return dest
 
 
 # ---------------------------------------------------------------------------
 # Aufbau / Befuellung
 # ---------------------------------------------------------------------------
+
+# Unter diesem Anteil des lokalen Bestands gilt eine API-Antwort als kaputt
+# (Wartung, Teilantwort) -- lieber abbrechen als Daten ueberschreiben.
+_MIN_FETCH_RATIO = 0.5
+
+
+def _check_fetch_plausible(db_path: str, cards: list, de_by_id: dict) -> None:
+    """Bricht VOR jeder Schreib-Transaktion ab, wenn die API leer oder
+    unplausibel klein antwortet. Sonst setzt der UPSERT alle deutschen
+    Namen auf NULL bzw. DELETE FROM card_sets leert die Sets -- und das
+    wuerde committet und als Erfolg gemeldet."""
+    local = 0
+    try:
+        with _conn(db_path) as conn:
+            local = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+    except sqlite3.Error:
+        pass  # frische DB ohne Tabelle
+    if not cards or len(cards) < local * _MIN_FETCH_RATIO:
+        raise RuntimeError(
+            f"API lieferte nur {len(cards)} Karten (lokal {local}) -- "
+            "Update abgebrochen, lokale Daten unveraendert."
+        )
+    if not de_by_id or len(de_by_id) < len(cards) * _MIN_FETCH_RATIO:
+        raise RuntimeError(
+            f"API lieferte nur {len(de_by_id)} deutsche Kartendaten -- "
+            "Update abgebrochen, lokale Daten unveraendert."
+        )
+
+
+def _unescape(text: Optional[str]) -> Optional[str]:
+    """Die API liefert vereinzelt HTML-Entities im Namen ('&amp;')."""
+    return html.unescape(text) if text else text
+
 
 def build_database(
     db_path: str = DEFAULT_DB,
@@ -86,6 +127,7 @@ def build_database(
         if db_version is None:
             db_version = fetch_db_version()
         de_by_id = fetch_all_cards_de()
+        _check_fetch_plausible(db_path, cards, de_by_id)
     else:
         de_by_id: dict[int, dict] = {}
     cards = list(cards)
@@ -128,7 +170,7 @@ def build_database(
                        desc_de=excluded.desc_de""",
                 (
                     c.get("id"),
-                    c.get("name"),
+                    _unescape(c.get("name")),
                     c.get("type"),
                     c.get("frameType"),
                     c.get("desc"),
@@ -140,7 +182,7 @@ def build_database(
                     c.get("archetype"),
                     c.get("scale"),
                     c.get("linkval"),
-                    de.get("name"),
+                    _unescape(de.get("name")),
                     de.get("desc"),
                 ),
             )

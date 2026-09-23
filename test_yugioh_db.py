@@ -634,6 +634,48 @@ class DbTests(unittest.TestCase):
         self.assertEqual(lines[solo]["variants"], [])
         self.assertNotIn(child, lines)  # Branch ist keine eigene Linie
 
+    # -- Daten-Update gegen kaputte API-Antworten -------------------------
+
+    def _counts(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                "SELECT (SELECT COUNT(*) FROM cards WHERE name_de IS NOT NULL),"
+                "       (SELECT COUNT(*) FROM card_sets)"
+            ).fetchone()
+        finally:
+            conn.close()
+
+    def test_build_database_aborts_on_empty_api_response(self):
+        from unittest import mock
+        from yugioh_db import api
+
+        before = self._counts()
+        one_card = [{"id": self.main_id, "name": "X"}]
+        cases = [
+            ([], {self.main_id: {"name": "Y"}}),         # EN leer
+            (one_card, {}),                               # DE leer
+            (one_card, {self.main_id: {"name": "Y"}}),    # EN unplausibel klein
+        ]
+        for en, de in cases:
+            with mock.patch.object(api, "fetch_all_cards", return_value=en),                  mock.patch.object(api, "fetch_all_cards_de", return_value=de),                  mock.patch.object(api, "fetch_db_version", return_value="x"):
+                with self.assertRaises(RuntimeError):
+                    ydb.build_database(self.db)
+            self.assertEqual(self._counts(), before)
+
+    def test_build_database_unescapes_html_entities(self):
+        ydb.build_database(
+            self.db, cards=[{"id": self.main_id, "name": "A &amp; B"}]
+        )
+        conn = sqlite3.connect(self.db)
+        try:
+            name = conn.execute(
+                "SELECT name FROM cards WHERE id = ?", (self.main_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(name, "A & B")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

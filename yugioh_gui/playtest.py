@@ -264,6 +264,7 @@ class PlayTestView(QWidget):
         self._names: dict[int, str] = {}
         self._deck: list[int] = []
         self._extra: list[int] = []
+        self._extra_ids: set[int] = set()  # card_ids, die ins Extra Deck gehoeren
         self._hand: list[_CardInst] = []
         self._mzones: list = [None] * 5
         self._szones: list = [None] * 5
@@ -443,12 +444,14 @@ class PlayTestView(QWidget):
             self._names = data["names"]
             self._deck = list(data["main"])
             self._extra = list(data["extra"])
+            self._extra_ids = set(data["extra"])
             random.shuffle(self._deck)
             for _ in range(self._hand_size()):
                 if self._deck:
                     self._hand.append(self._mk_inst(self._deck.pop(0)))
         else:
             self._names, self._deck, self._extra = {}, [], []
+            self._extra_ids = set()
         self._render()
 
     def _mk_inst(self, card_id: int) -> _CardInst:
@@ -822,23 +825,34 @@ class PlayTestView(QWidget):
     def _on_card_context(self, inst: _CardInst, pos: QPoint) -> None:
         menu = QMenu(self)
         in_hand = inst in self._hand
+        # Extra-Deck-Monster kehren ins Extra Deck zurueck, nie in Hand/Deck.
+        is_ed = inst.card_id in self._extra_ids
         a_face = a_pos = a_hand = None
         if not in_hand:
             a_face = menu.addAction("Offen" if inst.face_down else "Verdeckt")
             a_pos = menu.addAction("ATK" if inst.defense else "DEF")
-            a_hand = menu.addAction("→ Hand")
+            if not is_ed:
+                a_hand = menu.addAction("→ Hand")
         a_gy = menu.addAction("→ Friedhof")
         a_ban = menu.addAction("→ Verbannt")
-        a_deck = menu.addAction("→ Deck (oben)")
+        a_deck = menu.addAction("→ Extra-Deck" if is_ed else "→ Deck (oben)")
         menu.addSeparator()
         a_det = menu.addAction("Details…")
         chosen = menu.exec(pos)
+        menu.deleteLater()
         if chosen is None:
             return
         if chosen is a_det:
             self._open_detail(inst.card_id)
             return
         self._push_undo()
+        # Die Karte verlaesst ggf. ihren Platz -- eine aufgenommene Karte darf
+        # danach nicht mehr per Zonen-Klick abgelegt werden (sonst Duplikat).
+        if self._held is inst and chosen not in (a_face, a_pos):
+            self._held = None
+        if chosen not in (a_face, a_pos):
+            # Verdeckt/DEF gilt nur auf dem Feld.
+            inst.face_down = inst.defense = False
         here = "Hand" if in_hand else "Field"
         if chosen is a_face:
             was_set = inst.face_down
@@ -861,6 +875,9 @@ class PlayTestView(QWidget):
         elif chosen is a_ban:
             self._remove_inst(inst); self._banished.append(inst)
             self._rec(f"Banish {inst.name} ({here})", inst)
+        elif chosen is a_deck and is_ed:
+            self._remove_inst(inst); self._extra.append(inst.card_id)
+            self._rec(f"Send {inst.name} ({here} -> ED)", inst)
         elif chosen is a_deck:
             self._remove_inst(inst); self._deck.insert(0, inst.card_id)
             self._rec(f"Send {inst.name} ({here} -> Deck)", inst)
