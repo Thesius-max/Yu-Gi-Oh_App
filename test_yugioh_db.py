@@ -534,13 +534,19 @@ class DbTests(unittest.TestCase):
         self.assertIn("Starter", md)              # Rolle uebernommen
         self.assertIn("## Konsistenz & Kombo-Linien", md)
 
+    def _display_name(self, cid):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                "SELECT COALESCE(name_de, name) FROM cards WHERE id = ?", (cid,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
     def test_export_collection_text_respects_filter(self):
         # Eine bekannte Karte in den Bestand legen und gezielt danach filtern.
         ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="TST-001")
-        name = sqlite3.connect(self.db).execute(
-            "SELECT COALESCE(name_de, name) FROM cards WHERE id = ?",
-            (self.unowned_id,),
-        ).fetchone()[0]
+        name = self._display_name(self.unowned_id)
         full = ydb.export_collection_text(self.db)
         self.assertIn("Sammlung", full)
         self.assertIn(name, full)
@@ -553,10 +559,7 @@ class DbTests(unittest.TestCase):
         # Zwei Drucke derselben Karte -> in der KI-Ansicht eine Karte, Menge 3.
         ydb.add_to_collection(self.db, self.unowned_id, 1, set_code="A")
         ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="B")
-        name = sqlite3.connect(self.db).execute(
-            "SELECT COALESCE(name_de, name) FROM cards WHERE id = ?",
-            (self.unowned_id,),
-        ).fetchone()[0]
+        name = self._display_name(self.unowned_id)
         md = ydb.export_collection_markdown(self.db)
         self.assertIn("# Yu-Gi-Oh!-Sammlung", md)
         self.assertIn(f"### 3x {name}", md)

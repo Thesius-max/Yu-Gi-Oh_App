@@ -617,7 +617,7 @@ class PlayTestView(QWidget):
         """'■ Speichern…': Dialog zeigen; speichern, weiter aufzeichnen
         oder verwerfen."""
         if not self._rec_log:
-            self._stop_recording()
+            self._end_recording()
             self._render()
             return
         boss_ids: list[int] = []

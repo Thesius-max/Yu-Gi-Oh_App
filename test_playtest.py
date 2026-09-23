@@ -227,6 +227,14 @@ class PlayTestViewTests(unittest.TestCase):
         v._finish_recording()                  # kein zweites Speichern
         self.assertEqual(self._combo_count(), before + 1)
 
+    def test_undo_after_empty_recording_stays_off(self):
+        v = self.v
+        v._toggle_recording()
+        v.shuffle()                            # Snapshot mit recording=True
+        v._finish_recording()                  # nichts protokolliert -> aus
+        v.undo()
+        self.assertFalse(v._recording)
+
     def test_saved_pieces_capped_at_deck_copies(self):
         v = self.v
         v._toggle_recording()
