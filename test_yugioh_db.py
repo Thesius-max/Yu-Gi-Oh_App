@@ -101,6 +101,18 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(zones["extra"], [200])
         self.assertEqual(zones["side"], [300])
 
+    def test_parse_ydk_bom_and_unreadable_lines(self):
+        bad: list[str] = []
+        text = "\ufeff100\r\n²\r\n０１２\r\n5 -- Name\r\n"
+        zones = ydb.parse_ydk(text, bad)
+        self.assertEqual(zones["main"], [100])  # BOM-Zeile gelesen
+        self.assertEqual(bad, ["²", "０１２", "5 -- Name"])
+
+    def test_like_contains_escapes_wildcards(self):
+        from yugioh_db.schema import _like_contains
+        self.assertEqual(_like_contains(r" 50%_a\ "), r"%50\%\_a\\%")
+        self.assertEqual(_like_contains("ÜBER"), "%über%")
+
     def test_lint_combo_steps(self):
         self.assertEqual(ydb.lint_combo_steps(["NS Karte (Hand)"]), [])
         warnings = ydb.lint_combo_steps(["irgendwas ohne keyword"])
@@ -675,6 +687,118 @@ class DbTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(name, "A & B")
+
+    # -- Suche, Uebersetzungen, Import (Paket B) --------------------------
+
+    def _card(self, cid):
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            return conn.execute(
+                "SELECT name, name_de, desc_de FROM cards WHERE id = ?", (cid,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+    def _translated_card(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                "SELECT id FROM cards WHERE name_de IS NOT NULL "
+                "AND name_de != name AND id NOT IN "
+                "(SELECT card_id FROM card_translations) LIMIT 1"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_list_combos_text_search_en_de_variant_escape(self):
+        cid = self._translated_card()
+        card = self._card(cid)
+        main = ydb.create_combo(self.db, "Hauptlinie")
+        ydb.add_combo_card(self.db, main, cid, 1)
+        other = ydb.create_combo(self.db, "Übermut 100%")
+        variant = ydb.create_combo(self.db, "Gegen Nibiru")
+        ydb.set_combo_parent(self.db, variant, other)
+
+        def ids(text):
+            return {r["combo_id"] for r in ydb.list_combos(self.db, text=text)}
+
+        self.assertEqual(ids(card["name"][:6]), {main})      # englisch
+        self.assertEqual(ids(card["name_de"][:6]), {main})   # deutsch
+        self.assertEqual(ids("übermut"), {other})            # Umlaut-Casefold
+        self.assertEqual(ids("nibiru"), {other})             # via Variante
+        self.assertEqual(ids("0%"), {other})                 # % wortwoertlich
+        self.assertEqual(ids("_"), set())                    # _ kein Joker
+
+    def test_collection_filter_escapes_wildcards(self):
+        rows = ydb.list_collection(self.db, text="%")
+        self.assertTrue(all("%" in (r["name"] + (r["name_de"] or ""))
+                            for r in rows))
+
+    def test_removing_translation_override_reverts_card(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            cid = conn.execute(
+                "SELECT id FROM cards WHERE name_de IS NULL LIMIT 1"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        ydb.set_card_translation(self.db, cid, name_de="Falsch")
+        self.assertEqual(self._card(cid)["name_de"], "Falsch")
+        ydb.set_card_translation(self.db, cid, name_de="")
+        self.assertIsNone(self._card(cid)["name_de"])
+        self.assertIsNone(ydb.get_card_translation(self.db, cid))
+        # Suche findet den falschen Namen nicht mehr (FTS gepflegt).
+        conn = sqlite3.connect(self.db)
+        try:
+            hits = conn.execute(
+                "SELECT rowid FROM cards_fts WHERE cards_fts MATCH 'Falsch'"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertNotIn((cid,), hits)
+
+    def test_name_only_override_keeps_api_text(self):
+        cid = self._translated_card()
+        before = self._card(cid)
+        ydb.set_card_translation(self.db, cid, name_de="Eigener Name")
+        after = self._card(cid)
+        self.assertEqual(after["name_de"], "Eigener Name")
+        self.assertEqual(after["desc_de"], before["desc_de"])
+        self.assertIsNone(ydb.get_card_translation(self.db, cid)["desc_de"])
+
+    def test_get_combo_boss_name_is_german(self):
+        cid = self._translated_card()
+        combo = ydb.create_combo(self.db, "K")
+        ydb.add_combo_card(self.db, combo, cid, 1)
+        ydb.set_combo_boss(self.db, combo, cid)
+        self.assertEqual(
+            ydb.get_combo(self.db, combo)["boss_name"], self._card(cid)["name_de"]
+        )
+
+    def test_migrate_does_not_swallow_lock_errors(self):
+        # Spalte fehlt + Schreibsperre einer zweiten Verbindung: frueher
+        # kehrte ensure_schema still zurueck, jetzt gibt es einen Fehler.
+        conn = sqlite3.connect(self.db)
+        conn.execute("ALTER TABLE decks DROP COLUMN format_date")
+        conn.commit()
+        conn.execute("BEGIN EXCLUSIVE")
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                with ydb._conn(self.db) as c2:
+                    c2.execute("PRAGMA busy_timeout = 50")
+                    from yugioh_db.schema import _migrate
+                    _migrate(c2)
+        finally:
+            conn.rollback()
+            conn.close()
+        ydb.ensure_schema(self.db)  # ohne Sperre: Spalte wird nachgeruestet
+        conn = sqlite3.connect(self.db)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(decks)")}
+        finally:
+            conn.close()
+        self.assertIn("format_date", cols)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import re
 import sqlite3
 from typing import Iterable, Optional
 
-from .schema import _conn
+from .schema import _conn, _like_contains
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +98,10 @@ def list_combos(
     """Hauptlinien (parent_combo_id IS NULL), optional nach Heimat-Deck
     gefiltert: deck_id=None -> alle, deck_id=0 -> nur ohne Heimat-Deck, sonst
     das Deck. 'text' filtert zusaetzlich nach Name, Archetyp oder einem
-    Baustein-Kartennamen (de/en). Varianten haengen an ihrer Hauptlinie (siehe
-    combo_variants) und erscheinen hier bewusst nicht direkt."""
+    Baustein-Kartennamen (de UND en, Gross/Klein inkl. Umlaute egal);
+    passt eine Variante, erscheint ihre Hauptlinie. Varianten haengen an
+    ihrer Hauptlinie (siehe combo_variants) und erscheinen hier bewusst
+    nicht direkt."""
     sql = """SELECT cb.combo_id, cb.name, cb.archetype, cb.deck_id,
                     d.name AS deck_name
              FROM combos cb LEFT JOIN decks d ON d.deck_id = cb.deck_id
@@ -111,13 +113,19 @@ def list_combos(
         sql += " AND cb.deck_id = ?"
         args = (deck_id,)
     if text and text.strip():
-        like = f"%{text.strip()}%"
-        sql += """ AND (cb.name LIKE ? OR cb.archetype LIKE ?
-                        OR cb.combo_id IN (
-                            SELECT cc.combo_id FROM combo_cards cc
-                            JOIN cards c ON c.id = cc.card_id
-                            WHERE COALESCE(c.name_de, c.name) LIKE ?))"""
-        args = args + (like, like, like)
+        like = _like_contains(text)
+        # Treffer-Menge ueber Hauptlinien UND Varianten (m); eine passende
+        # Variante bringt ihre Hauptlinie mit.
+        sql += """ AND cb.combo_id IN (
+            SELECT COALESCE(m.parent_combo_id, m.combo_id) FROM combos m
+            WHERE casefold(m.name) LIKE ? ESCAPE '\\'
+               OR casefold(m.archetype) LIKE ? ESCAPE '\\'
+               OR m.combo_id IN (
+                   SELECT cc.combo_id FROM combo_cards cc
+                   JOIN cards c ON c.id = cc.card_id
+                   WHERE casefold(c.name) LIKE ? ESCAPE '\\'
+                      OR casefold(c.name_de) LIKE ? ESCAPE '\\'))"""
+        args = args + (like, like, like, like)
     sql += " ORDER BY cb.name"
     with _conn(db_path) as conn:
         return conn.execute(sql, args).fetchall()
@@ -127,7 +135,7 @@ def get_combo(db_path: str, combo_id: int) -> Optional[sqlite3.Row]:
     with _conn(db_path) as conn:
         return conn.execute(
             """SELECT cb.combo_id, cb.name, cb.archetype, cb.notes,
-                      cb.boss_card_id, b.name AS boss_name,
+                      cb.boss_card_id, COALESCE(b.name_de, b.name) AS boss_name,
                       cb.deck_id, d.name AS deck_name,
                       cb.parent_combo_id, p.name AS parent_name
                FROM combos cb

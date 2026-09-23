@@ -171,11 +171,27 @@ CREATE TABLE IF NOT EXISTS combo_steps (
 """
 
 
+def _casefold(value):
+    """SQL-Funktion casefold(x): SQLites LIKE/lower() sind nur fuer ASCII
+    case-insensitiv -- 'über' faende sonst 'Über…' nicht."""
+    return value.casefold() if isinstance(value, str) else value
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.create_function("casefold", 1, _casefold, deterministic=True)
     return conn
+
+
+def _like_contains(text: str) -> str:
+    r"""LIKE-Muster 'enthaelt text' (casefold, %/_/\ escaped). Gehoert zu
+    SQL der Form  casefold(spalte) LIKE ? ESCAPE '\'  -- sonst wirken
+    '%' und '_' in der Eingabe als Platzhalter."""
+    esc = (text.strip().casefold()
+           .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+    return f"%{esc}%"
 
 
 @contextlib.contextmanager
@@ -194,7 +210,10 @@ def _conn(db_path: str):
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Ruestet Spalten nach, die juenger sind als die Tabelle selbst
-    (CREATE TABLE IF NOT EXISTS ergaenzt keine Spalten). Idempotent."""
+    (CREATE TABLE IF NOT EXISTS ergaenzt keine Spalten). Idempotent.
+    Vorhandene Spalten werden per PRAGMA ermittelt statt Fehler zu schlucken
+    -- ein 'database is locked' darf nicht als 'Spalte existiert' gelten."""
+    existing: dict[str, set[str]] = {}
     for table, col, decl in (
         ("cards", "name_de", "TEXT"),
         ("cards", "desc_de", "TEXT"),
@@ -207,10 +226,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("decks", "source", "TEXT"),
         ("decks", "format_date", "TEXT"),
     ):
-        try:
+        if table not in existing:
+            existing[table] = {
+                r[1] for r in conn.execute(f"PRAGMA table_info({table})")
+            }
+        if col not in existing[table]:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-        except sqlite3.OperationalError:
-            pass  # Spalte existiert bereits
+            existing[table].add(col)
 
 
 def ensure_schema(db_path: str = DEFAULT_DB) -> None:

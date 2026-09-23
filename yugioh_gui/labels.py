@@ -104,6 +104,13 @@ def import_report_lines(report: dict) -> list[str]:
         lines.append(
             "In die passende Zone verschoben: " + ", ".join(report["moved"])
         )
+    if report.get("unreadable"):
+        shown = report["unreadable"][:5]
+        more = len(report["unreadable"]) - len(shown)
+        lines.append(
+            "Nicht lesbare Zeilen (übersprungen): " + ", ".join(shown)
+            + (f" … und {more} weitere" if more > 0 else "")
+        )
     return lines
 
 

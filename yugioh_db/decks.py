@@ -357,12 +357,16 @@ def export_deck_ydk(db_path: str, deck_id: int) -> str:
         return "\n".join(lines) + "\n"
 
 
-def parse_ydk(text: str) -> dict[str, list[int]]:
+def parse_ydk(
+    text: str, unreadable: Optional[list[str]] = None
+) -> dict[str, list[int]]:
     """Zerlegt .ydk-Text in {'main': [ids...], 'extra': [...], 'side': [...]}.
-    Jede Kopie steht einzeln in der Liste. Unbekannte Zeilen werden ignoriert."""
+    Jede Kopie steht einzeln in der Liste. Kommentare werden ignoriert;
+    sonstige nicht lesbare Zeilen landen (falls uebergeben) in 'unreadable'.
+    Ein UTF-8-BOM am Dateianfang wird entfernt."""
     zones: dict[str, list[int]] = {"main": [], "extra": [], "side": []}
     current = "main"
-    for raw in text.splitlines():
+    for raw in text.lstrip("\ufeff").splitlines():
         line = raw.strip()
         if not line:
             continue
@@ -373,8 +377,10 @@ def parse_ydk(text: str) -> dict[str, list[int]]:
             current = "side"
         elif line.startswith(("#", "!")):
             continue  # Kommentar (z.B. "#created by ...")
-        elif line.isdigit():
+        elif line.isascii() and line.isdigit():  # '²'/'０' sind isdigit()
             zones[current].append(int(line))
+        elif unreadable is not None:
+            unreadable.append(line)
     return zones
 
 
@@ -393,11 +399,14 @@ def import_deck_ydk(
       unknown   -- Passcodes ohne Karte in der DB (DB veraltet/fremde Karte)
       capped    -- Kartennamen, bei denen Kopien ueber der 3er-Grenze wegfielen
       moved     -- Kartennamen, die in die zum Typ passende Zone wandern mussten
+      unreadable -- Zeilen, die weder Passcode noch Abschnitt/Kommentar sind
+    Kartennamen im Report sind deutsch (Englisch als Fallback).
     """
-    zones = parse_ydk(text)
+    unreadable: list[str] = []
+    zones = parse_ydk(text, unreadable)
     report: dict = {
         "imported": {"main": 0, "extra": 0, "side": 0},
-        "unknown": [], "capped": [], "moved": [],
+        "unknown": [], "capped": [], "moved": [], "unreadable": unreadable,
     }
     with _conn(db_path) as conn:
         # Kopien je (zone, card_id) zaehlen; Zone ggf. korrigieren.
@@ -407,7 +416,8 @@ def import_deck_ydk(
             for cid in ids:
                 if cid not in cards:
                     row = conn.execute(
-                        "SELECT name, type, frame_type FROM cards WHERE id = ?",
+                        "SELECT COALESCE(name_de, name) AS name, type, "
+                        "frame_type FROM cards WHERE id = ?",
                         (cid,),
                     ).fetchone()
                     cards[cid] = row

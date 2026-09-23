@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from .schema import _conn
+from .schema import _conn, _like_contains
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +74,11 @@ def list_collection(
              JOIN cards c ON c.id = col.card_id"""
     where, args = [], []
     if text and text.strip():
-        like = f"%{text.strip()}%"
-        where.append("(c.name LIKE ? OR c.name_de LIKE ?)")
+        like = _like_contains(text)
+        where.append(
+            "(casefold(c.name) LIKE ? ESCAPE '\\' "
+            "OR casefold(c.name_de) LIKE ? ESCAPE '\\')"
+        )
         args += [like, like]
     if untranslated_only:
         where.append("c.name_de IS NULL")

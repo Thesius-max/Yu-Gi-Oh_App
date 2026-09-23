@@ -64,6 +64,16 @@ def filter_cards(
         ).fetchall()
 
 
+def get_card_translation(db_path: str, card_id: int) -> Optional[sqlite3.Row]:
+    """Eigener DE-Override einer Karte (name_de, desc_de) oder None --
+    nur die Benutzerdaten, nicht die API-Werte aus cards."""
+    with _conn(db_path) as conn:
+        return conn.execute(
+            "SELECT name_de, desc_de FROM card_translations WHERE card_id = ?",
+            (card_id,),
+        ).fetchone()
+
+
 def set_card_translation(
     db_path: str, card_id: int,
     name_de: Optional[str] = None, desc_de: Optional[str] = None,
@@ -71,11 +81,15 @@ def set_card_translation(
     """Eigene DE-Uebersetzung (Override) fuer eine Karte setzen.
 
     Leere Werte bedeuten 'kein Override fuer dieses Feld'; sind beide leer,
-    wird der Override entfernt (die Karte faellt beim naechsten Daten-Update
-    auf die API-Werte zurueck). Schreibt direkt nach cards durch und haelt
-    den FTS-Index aktuell, damit die Suche den Namen sofort findet."""
-    name_de = (name_de or "").strip() or None
-    desc_de = (desc_de or "").strip() or None
+    wird der Override entfernt. Schreibt direkt nach cards durch und haelt
+    den FTS-Index aktuell, damit die Suche den Namen sofort findet. Wird ein
+    bestehender Override geleert, faellt das Feld in cards auf NULL zurueck
+    (der API-Wert ist lokal nicht mehr vorhanden -- er kommt beim naechsten
+    Daten-Update zurueck); so bleibt ein falscher Name nicht haengen."""
+    new = {
+        "name_de": (name_de or "").strip() or None,
+        "desc_de": (desc_de or "").strip() or None,
+    }
     with _conn(db_path) as conn:
         old = conn.execute(
             "SELECT name, description, name_de, desc_de FROM cards WHERE id = ?",
@@ -83,19 +97,30 @@ def set_card_translation(
         ).fetchone()
         if old is None:
             raise ValueError(f"Karte {card_id} nicht gefunden.")
-        if name_de is None and desc_de is None:
+        prev = conn.execute(
+            "SELECT name_de, desc_de FROM card_translations WHERE card_id = ?",
+            (card_id,),
+        ).fetchone()
+        if new["name_de"] is None and new["desc_de"] is None:
             conn.execute(
                 "DELETE FROM card_translations WHERE card_id = ?", (card_id,)
             )
-            conn.commit()
-            return
-        conn.execute(
-            """INSERT INTO card_translations (card_id, name_de, desc_de)
-               VALUES (?,?,?)
-               ON CONFLICT(card_id) DO UPDATE SET
-                   name_de = excluded.name_de, desc_de = excluded.desc_de""",
-            (card_id, name_de, desc_de),
-        )
+        else:
+            conn.execute(
+                """INSERT INTO card_translations (card_id, name_de, desc_de)
+                   VALUES (?,?,?)
+                   ON CONFLICT(card_id) DO UPDATE SET
+                       name_de = excluded.name_de, desc_de = excluded.desc_de""",
+                (card_id, new["name_de"], new["desc_de"]),
+            )
+        values = {}
+        for field, value in new.items():
+            if value is not None:
+                values[field] = value
+            elif prev is not None and prev[field] is not None                     and old[field] == prev[field]:
+                values[field] = None      # Override entfernt -> kein DE-Wert
+            else:
+                values[field] = old[field]  # API-Wert bleibt unangetastet
         # FTS (external content) verlangt beim Loeschen die ALTEN Werte.
         conn.execute(
             "INSERT INTO cards_fts (cards_fts, rowid, name, description, "
@@ -104,9 +129,8 @@ def set_card_translation(
              old["name_de"], old["desc_de"]),
         )
         conn.execute(
-            "UPDATE cards SET name_de = COALESCE(?, name_de), "
-            "desc_de = COALESCE(?, desc_de) WHERE id = ?",
-            (name_de, desc_de, card_id),
+            "UPDATE cards SET name_de = ?, desc_de = ? WHERE id = ?",
+            (values["name_de"], values["desc_de"], card_id),
         )
         conn.execute(
             "INSERT INTO cards_fts (rowid, name, description, name_de, desc_de) "

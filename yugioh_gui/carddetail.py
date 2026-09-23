@@ -112,15 +112,26 @@ def edit_card_translation(repo: "CardRepository", card_id: int, parent) -> bool:
     dlg.resize(420, 360)
     v = QVBoxLayout(dlg)
     v.addWidget(QLabel(f"Karte: {card['name']}"))
+    # Nur eigene Overrides vorbelegen; der aktuelle Wert steht grau als
+    # Platzhalter -- sonst wuerde ein unveraenderter API-Text beim Speichern
+    # still zum Override und kuenftige API-Korrekturen kaemen nie mehr an.
+    own = ydb.get_card_translation(repo.db_path, card_id)
     form = QFormLayout()
-    name_edit = QLineEdit(card["name_de"] or "")
+    name_edit = QLineEdit((own["name_de"] if own else None) or "")
+    name_edit.setPlaceholderText(card["name_de"] or card["name"])
     form.addRow("Name (DE)", name_edit)
     v.addLayout(form)
     v.addWidget(QLabel("Kartentext (DE):"))
     desc_edit = QTextEdit()
-    desc_edit.setPlainText(card["desc_de"] or "")
+    desc_edit.setPlainText((own["desc_de"] if own else None) or "")
+    desc_edit.setPlaceholderText(card["desc_de"] or card["description"] or "")
     v.addWidget(desc_edit, stretch=1)
-    hint = QLabel("Leere Felder lassen die API-Daten unangetastet.")
+    hint = QLabel(
+        "Leere Felder = keine eigene Übersetzung (grau: aktueller Wert). "
+        "Eine entfernte eigene Übersetzung fällt bis zum nächsten "
+        "Daten-Update auf Englisch zurück."
+    )
+    hint.setWordWrap(True)
     hint.setStyleSheet("color: #888;")
     v.addWidget(hint)
     btn_row = QHBoxLayout()

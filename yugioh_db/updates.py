@@ -47,7 +47,11 @@ def ensure_user_db(db_path: str = DEFAULT_DB) -> bool:
         return True
     seed = bundled_seed_path()
     if seed is not None:
-        shutil.copy(seed, db_path)
+        # Atomar: eine abgebrochene Kopie darf nicht als gueltige DB liegen
+        # bleiben (exists() oben wuerde sie sonst fuer immer akzeptieren).
+        tmp = f"{db_path}.part"
+        shutil.copy(seed, tmp)
+        os.replace(tmp, db_path)
         return True
     return False
 
