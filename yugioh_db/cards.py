@@ -1,8 +1,8 @@
-"""Karten-Nachschlagewerk: Suche, Filter, Klassifikation, Uebersetzung.
+"""Karten-Nachschlagewerk: Klassifikation und eigene Uebersetzungen.
 
-Volltext-/Attributsuche ueber die Referenztabelle cards, die natuerliche
-Zonen-/Kategorien-Zuordnung (deck_zone_for, card_category) und eigene
-DE-Uebersetzungen (set_card_translation, ueberleben Daten-Updates).
+Die natuerliche Zonen-/Kategorien-Zuordnung (deck_zone_for, card_category)
+und eigene DE-Uebersetzungen (get/set_card_translation, ueberleben
+Daten-Updates). Die Kartensuche selbst lebt in der GUI (CardRepository).
 """
 
 from __future__ import annotations
@@ -11,57 +11,6 @@ import sqlite3
 from typing import Optional
 
 from .schema import _conn
-
-
-# ---------------------------------------------------------------------------
-# Suche / Filter (Nachschlagewerk)
-# ---------------------------------------------------------------------------
-
-def search_text(db_path: str, query: str, limit: int = 50) -> list[sqlite3.Row]:
-    """Volltextsuche in Name und Kartentext."""
-    with _conn(db_path) as conn:
-        return conn.execute(
-            """SELECT c.* FROM cards_fts
-               JOIN cards c ON c.id = cards_fts.rowid
-               WHERE cards_fts MATCH ?
-               ORDER BY rank
-               LIMIT ?""",
-            (query, limit),
-        ).fetchall()
-
-
-def filter_cards(
-    db_path: str,
-    *,
-    type: Optional[str] = None,
-    attribute: Optional[str] = None,
-    archetype: Optional[str] = None,
-    level: Optional[int] = None,
-    atk_min: Optional[int] = None,
-    atk_max: Optional[int] = None,
-    limit: int = 200,
-) -> list[sqlite3.Row]:
-    """Strukturierter Filter ueber die Kartenattribute."""
-    clauses, params = [], []
-    if type is not None:
-        clauses.append("type = ?"); params.append(type)
-    if attribute is not None:
-        clauses.append("attribute = ?"); params.append(attribute)
-    if archetype is not None:
-        clauses.append("archetype = ?"); params.append(archetype)
-    if level is not None:
-        clauses.append("level = ?"); params.append(level)
-    if atk_min is not None:
-        clauses.append("atk >= ?"); params.append(atk_min)
-    if atk_max is not None:
-        clauses.append("atk <= ?"); params.append(atk_max)
-
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    params.append(limit)
-    with _conn(db_path) as conn:
-        return conn.execute(
-            f"SELECT * FROM cards {where} ORDER BY name LIMIT ?", params
-        ).fetchall()
 
 
 def get_card_translation(db_path: str, card_id: int) -> Optional[sqlite3.Row]:

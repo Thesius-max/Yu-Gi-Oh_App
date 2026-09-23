@@ -9,6 +9,7 @@ beurteilen kann.
 from __future__ import annotations
 
 import datetime
+import re
 import sqlite3
 from typing import Optional
 
@@ -206,6 +207,21 @@ def _card_meta_line(d: sqlite3.Row) -> str:
     return " · ".join(str(p) for p in parts)
 
 
+def _md_inline(text: str) -> str:
+    """Kartennamen fuer Markdown-Ueberschriften entschaerfen: '<P>' (z.B.
+    'Maliss <P> Dormouse') wuerde sonst als HTML-Tag verschluckt,
+    Backticks oeffneten Code-Spans."""
+    return (text.replace("\\", "\\\\").replace("`", "\\`")
+            .replace("<", "\\<").replace(">", "\\>"))
+
+
+def _md_fence(content: str) -> str:
+    """Code-Fence, die laenger ist als jede Backtick-Folge im Inhalt --
+    Benutzer-Schritte/-Notizen mit ``` sprengen den Block so nicht."""
+    longest = max((len(m) for m in re.findall(r"`+", content)), default=0)
+    return "`" * max(3, longest + 1)
+
+
 def _card_md_block(
     d: Optional[sqlite3.Row], lead: str, roles: Optional[list[str]] = None
 ) -> list[str]:
@@ -213,7 +229,7 @@ def _card_md_block(
     optional Archetyp/Rolle und der volle Effekttext (eingerueckt)."""
     if d is None:
         return [f"### {lead}(unbekannte Karte)", ""]
-    block = [f"### {lead}{d['name']}", f"- Typ: {_card_meta_line(d)}"]
+    block = [f"### {lead}{_md_inline(d['name'])}", f"- Typ: {_card_meta_line(d)}"]
     if d["archetype"]:
         block.append(f"- Archetyp: {d['archetype']}")
     if roles:
@@ -388,5 +404,6 @@ def export_deck_markdown(db_path: str, deck_id: int) -> str:
     # Wahrheit); woertlich in einen Codeblock gesetzt, damit das Textlayout
     # (== Ueberschriften, '->'-Ketten) im Markdown erhalten bleibt.
     combo_text = export_deck_combos_text(db_path, deck_id).rstrip("\n")
-    lines += ["", "## Konsistenz & Kombo-Linien", "", "```", combo_text, "```", ""]
+    fence = _md_fence(combo_text)
+    lines += ["", "## Konsistenz & Kombo-Linien", "", fence, combo_text, fence, ""]
     return "\n".join(lines) + "\n"

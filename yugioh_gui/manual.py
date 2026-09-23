@@ -12,8 +12,7 @@ from PySide6.QtWidgets import (
     QWidget
 )
 
-from .combos import NOTATION_MD
-
+from .notation import NOTATION_MD
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +73,9 @@ Zeigt Bild, Werte und Kartentext der gewählten Karte. Das Bild wird beim
 ersten Aufruf einmal lokal zwischengespeichert.
 
 - **✎ DE** — eigene **deutsche Übersetzung** für Name und/oder Kartentext
-  hinterlegen. Leere Felder lassen die Originaldaten unangetastet. Deine
+  hinterlegen. Der aktuelle Wert steht grau im Feld; leere Felder lassen die
+  Originaldaten unangetastet. Leerst du eine eigene Übersetzung wieder, fällt
+  die Karte bis zum nächsten Kartendaten-Update auf Englisch zurück. Deine
   Übersetzungen überleben Kartendaten-Updates.
 - **Sammlung → Hinzufügen** — legt die Karte in deinen Bestand (gleiche Drucke
   werden zusammengeführt, nicht dupliziert).
@@ -89,7 +90,13 @@ ersten Aufruf einmal lokal zwischengespeichert.
 
 Hier steht dein **physischer Kartenbestand** — was du tatsächlich besitzt.
 
-- **Filter:** nach Name, Attribut und Archetyp eingrenzen.
+- **Filter:** nach Name (deutsch oder englisch), Kartenklasse, Attribut und
+  Archetyp eingrenzen.
+- **Nur unübersetzte** — zeigt nur Karten ohne deutsche Übersetzung. Solche
+  Karten sind in der Tabelle **orange** markiert; die Zusammenfassung zählt sie.
+- **Menge** ändern: Doppelklick auf die Mengen-Zelle.
+- **Kartenbild:** Maus über den Kartennamen zeigt eine Vorschau,
+  **Doppelklick** auf die Zeile öffnet die Kartendetails (inkl. ✎ DE).
 - **Exportieren…** — speichert die Sammlung als lesbare Liste (`.txt`/`.pdf`)
   oder als **Markdown für KI** (`.md`, jede Karte mit vollem Effekttext und
   Menge). Sind Filter aktiv, wird nur die gefilterte Ansicht exportiert,
@@ -118,6 +125,8 @@ Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
   **+ Karte hinzufügen** im Deck-Tab.
 - **−1 / +1 / Entfernen** — Kopienzahl der markierten Karte ändern.
 - **→ Deck / → Side** — Karte zwischen Main/Extra und Side verschieben.
+- Maus über dem Kartennamen zeigt das **Kartenbild**, **Doppelklick** öffnet
+  die Kartendetails.
 
 **Automatik & Regeln:**
 
@@ -146,6 +155,12 @@ Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
 speisen nur die Vorschläge (siehe Kombo-Hilfe → Vorschläge). Tagge sie mit
 **Quelle** und **Stand (Datum)**; neuere Listen werden höher gewichtet.
 
+## Vergleich… (gegen eine Referenz-Liste)
+
+**Vergleich…** stellt das aktive Deck kopiengenau einer Korpus-/Referenz-
+Liste gegenüber (Main + Extra, Side außen vor): was die Referenz **mehr** hat
+und was **du mehr** hast, nach Differenz sortiert.
+
 ## Kombo-Hilfe (rechte Box)
 
 Fünf Reiter:
@@ -161,7 +176,9 @@ Fünf Reiter:
   ihre **Interruption-Branches** (Varianten) — eine Linie ohne Branches steht
   bei gegnerischer Störung ohne Plan B da. Details im Tooltip.
 - **Vorschläge** — Kartenempfehlungen aus dem Synergie-Graphen samt
-  **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab.
+  **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab. Oben
+  steht der **Engpass** — die Rolle mit den wenigsten Kopien in Main + Extra;
+  passende Vorschläge stehen unter „Füllt die Lücke".
 - **Starthand** — interaktiver Simulator: Karten ankreuzen (Wahrscheinlichkeit
   „alle zusammen" oder „mindestens eine") und Zufallshände ziehen, mit
   Rollen-/Brick-Verdikt.
@@ -169,7 +186,8 @@ Fünf Reiter:
   mehr oder weniger** die Starter-/Handtrap-Wahrscheinlichkeit? Sortiert
   danach, wo +1 am meisten bringt; ±1 verschiebt auch die Deckgröße, deshalb
   bewegen selbst Karten ohne Rolle die Werte. Klick auf eine Zeile zeigt die
-  volle Aufschlüsselung (beide Handgrößen, +1 und −1, inkl. Brick).
+  volle Aufschlüsselung (beide Handgrößen, +1 und −1, inkl. Brick). Liegt eine
+  Karte über alle Zonen (inkl. Side) schon 3× im Deck, gibt es kein +1.
 
 **Kombo-Linien exportieren…** schreibt die Linien des Decks als `.txt` oder
 `.pdf` — z. B. um sie einem erfahrenen Spieler zum Drüberschauen zu geben.
@@ -179,8 +197,10 @@ Fünf Reiter:
 # Spielfeld (Goldfishing)
 
 Ein **Solitaire-Sandkasten**: Deck wählen, Starthand ziehen und Linien frei
-durchspielen — **ohne Regeln, ohne Gegner**. Nichts wird gespeichert;
-**Neue Starthand** beginnt von vorn.
+durchspielen — **ohne Regeln, ohne Gegner**. Der Spielzustand selbst wird
+nicht gespeichert; **Neue Starthand** beginnt von vorn. Dauerhaft bleibt nur,
+was du mit dem **Kombo-Recorder** (siehe unten) ausdrücklich als Kombo
+speicherst.
 
 ## Karten bewegen
 
@@ -188,7 +208,9 @@ durchspielen — **ohne Regeln, ohne Gegner**. Nichts wird gespeichert;
   ein Klick auf eine freie Zone legt sie dort ab. Erneuter Klick auf die
   Karte legt sie zurück.
 - **Rechtsklick** öffnet das Kontextmenü: offen/verdeckt, ATK/DEF,
-  → Hand / Friedhof / Verbannt / Deck (oben), Details.
+  → Hand / Friedhof / Verbannt / Deck (oben), Details. Extra-Deck-Monster
+  gehen stattdessen **→ Extra-Deck** zurück (nie in Hand oder Main Deck).
+  Verdeckt/DEF gilt nur auf dem Feld und wird beim Verlassen zurückgesetzt.
 - **Klick auf das Deck** zieht eine Karte.
 
 ## Stapel (Deck / Extra / Friedhof / Verbannt)
@@ -218,14 +240,17 @@ Starthand** leert den Verlauf.
 Notation (`NS`/`SS`/`Act`/`Set`/`Add`/`Send`/`Mill`/…). Dabei gilt: die
 **erste** Beschwörung aus der Hand wird `NS`, alle weiteren `SS`; Karten,
 die du aus einem Stapel **aufnimmst** und ablegst, werden `SS <X> (ED/GY/…)`;
-das Aufdecken einer gesetzten Zauber/Falle wird `Act`. **Rückgängig** nimmt
-auch protokollierte Schritte zurück.
+das Aufdecken einer gesetzten Zauber/Falle wird `Act`. Drehst du eine eben
+abgelegte Karte gleich auf **verdeckt**, wird daraus `Set`. **Rückgängig**
+nimmt auch protokollierte Schritte zurück. Ein Deckwechsel oder eine neue
+Starthand fragt nach, bevor eine laufende Aufzeichnung verworfen wird.
 
 **■ Speichern…** legt die Aufzeichnung als **Kombo** an: mit den benutzten
 Karten als Bausteinen, dem Spielfeld-Deck als **Heimat-Deck** (dadurch
 erscheint sie sofort in der Kombo-Hilfe des Deck-Tabs), einem
 **Boss-Vorschlag** (letzte Extra-Deck-Beschwörung) und `Start:`/`End:` in
-den Notizen. Danach springt die App in den Kombos-Tab.
+den Notizen. Danach springt die App in den Kombos-Tab. Die Baustein-Mengen
+sind auf die Kopien im Deck begrenzt.
 
 > Das Protokoll ist ein **Entwurf**: Es hält fest, *was sich bewegt hat* —
 > welcher **Effekt** eine Suche oder Beschwörung ausgelöst hat, weißt nur
@@ -239,7 +264,18 @@ den Notizen. Danach springt die App in den Kombos-Tab.
 Die **Kombo-Bibliothek** ist das Herz der App: Hier dokumentierst du Spiel-
 Linien. Sie liefern Guides, den Deck-Fahrplan **und** die Kartenvorschläge.
 
-Links die Kombo-Liste (mit **Deck-Filter**), rechts der Editor.
+Links die Kombo-Liste (mit **Deck-Filter** und **Suchfeld**), rechts der
+Editor. Die Suche findet Kombos über Name, Archetyp oder einen **Baustein**
+(deutscher oder englischer Kartenname, Groß/Klein egal); passt eine Variante,
+erscheint ihre Hauptlinie.
+
+## Varianten (Interruption-Branches)
+
+Eine **Variante** beschreibt, wie eine Hauptlinie bei gegnerischer Störung
+weitergeht. **Neue Variante…** legt eine an; über **Variante von** hängst du
+eine bestehende Kombo unter eine Hauptlinie. Varianten stehen eingerückt
+(`↳`) unter ihrer Hauptlinie. Die Struktur ist bewusst **zweistufig**, und nur
+Hauptlinien zählen in Abdeckung, Fahrplan und Vorschlägen.
 
 ## Kopfdaten
 
@@ -270,6 +306,9 @@ Cursor-Position ein — nur die **Kartennamen** tippst du selbst. Der Button
 
 Eine beratende **Prüfung** warnt unter dem Editor, wenn ein Schritt von der
 Notation abweicht — sie **blockiert nie**.
+
+**Durchspielen…** zeigt die Schritte einzeln: der aktuelle Schritt gold,
+erledigte normal, kommende abgeblendet (Pfeiltasten oder Buttons).
 
 > **Auto-Speichern:** Name, Archetyp, Notizen und Schritte werden kurz nach der
 > Eingabe automatisch gesichert (und immer vor einem Wechsel). Rollen, Boss und

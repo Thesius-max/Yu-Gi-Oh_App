@@ -53,6 +53,7 @@ def resolve_export_path(
         if key in selected:
             ext = e
             break
-    if "." not in os.path.basename(path):
-        path += ext
+    # Keine bekannte Endung -> anhaengen, auch wenn der Name schon einen
+    # Punkt enthaelt ("RDA v1.2" wuerde sonst ohne Endung gespeichert).
+    path += ext
     return path, ext

@@ -113,6 +113,12 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(_like_contains(r" 50%_a\ "), r"%50\%\_a\\%")
         self.assertEqual(_like_contains("ÜBER"), "%über%")
 
+    def test_markdown_escaping(self):
+        from yugioh_db.exports import _md_fence, _md_inline
+        self.assertEqual(_md_inline("Maliss <P> `x`"), r"Maliss \<P\> \`x\`")
+        self.assertEqual(_md_fence("ohne"), "```")
+        self.assertEqual(_md_fence("a ``` b ```` c"), "`````")
+
     def test_lint_combo_steps(self):
         self.assertEqual(ydb.lint_combo_steps(["NS Karte (Hand)"]), [])
         warnings = ydb.lint_combo_steps(["irgendwas ohne keyword"])

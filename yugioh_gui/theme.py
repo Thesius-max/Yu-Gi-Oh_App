@@ -168,6 +168,16 @@ QToolTip {
 #BoardZone {
     background: #1f1830; border: 1px solid #3a2f4d; border-radius: 4px;
 }
+
+/* Benannte Widgets statt Inline-Styles in den Views */
+#HintLabel { color: #9b90b5; }
+#LintLabel { color: #e6a23c; }
+#CardImage { border: 1px solid #3a2f4d; color: #9b90b5; }
+#CardTitle { font-size: 16px; font-weight: bold; }
+#TokenChip { padding: 1px 6px; }
+#HeldCard { border: 2px solid #d4af37; }
+#ZonePlaceholder { color: #5b5273; }
+#PileCaption { color: #cfc6e0; font-size: 9px; }
 """
 
 

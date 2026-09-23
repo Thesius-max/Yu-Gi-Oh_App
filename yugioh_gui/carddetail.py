@@ -132,7 +132,7 @@ def edit_card_translation(repo: "CardRepository", card_id: int, parent) -> bool:
         "Daten-Update auf Englisch zurück."
     )
     hint.setWordWrap(True)
-    hint.setStyleSheet("color: #888;")
+    hint.setObjectName("HintLabel")
     v.addWidget(hint)
     btn_row = QHBoxLayout()
     ok_btn = QPushButton("Speichern")
@@ -164,10 +164,10 @@ class DetailPanel(CardImageView, QWidget):
         self.image = QLabel("Keine Karte ausgewählt")
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumSize(220, 320)
-        self.image.setStyleSheet("border: 1px solid #555; color: #888;")
+        self.image.setObjectName("CardImage")
 
         self.name = QLabel("")
-        self.name.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self.name.setObjectName("CardTitle")
         self.name.setWordWrap(True)
         # Eigene Uebersetzung pflegen -- fuer Karten, denen die API keinen
         # deutschen Namen/Text liefert.
@@ -312,10 +312,10 @@ class CardDetailDialog(CardImageView, QDialog):
         self.image = QLabel("")
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumSize(self.IMG_W, self.IMG_H)
-        self.image.setStyleSheet("border: 1px solid #555; color: #888;")
+        self.image.setObjectName("CardImage")
 
         self.name = QLabel("")
-        self.name.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self.name.setObjectName("CardTitle")
         self.name.setWordWrap(True)
         self.edit_trans_btn = QPushButton("✎ DE")
         self.edit_trans_btn.setToolTip("Deutsche Übersetzung bearbeiten")

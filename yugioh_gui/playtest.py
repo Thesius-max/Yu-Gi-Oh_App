@@ -57,7 +57,7 @@ class _BoardCard(QLabel):
         self.setFixedSize(pixmap.size())
         self.setToolTip(inst.name)
         if held:
-            self.setStyleSheet("border: 2px solid #d4af37;")
+            self.setObjectName("HeldCard")
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.RightButton:
@@ -980,7 +980,7 @@ class PlayTestView(QWidget):
     def _zone_placeholder(self, key: str) -> QLabel:
         lbl = QLabel(self._PLACEMENT_LABELS.get(key[0], ""))
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        lbl.setStyleSheet("color: #5b5273;")
+        lbl.setObjectName("ZonePlaceholder")
         return lbl
 
     def _pile_widget(self, name: str, count: int,
@@ -1000,7 +1000,7 @@ class PlayTestView(QWidget):
         v.addWidget(img, alignment=Qt.AlignmentFlag.AlignCenter)
         cap = QLabel(f"{name} {count}")
         cap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        cap.setStyleSheet("color: #cfc6e0; font-size: 9px;")
+        cap.setObjectName("PileCaption")
         v.addWidget(cap, alignment=Qt.AlignmentFlag.AlignCenter)
         return host
 

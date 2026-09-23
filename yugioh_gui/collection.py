@@ -209,6 +209,10 @@ class CollectionView(QWidget):
             archetype=self.filter_arch.currentData(),
             untranslated_only=self.filter_untranslated.isChecked(),
         )
+        # Auswahl + Scrollposition ueber den Neuaufbau retten (z.B. nach
+        # einer DE-Uebersetzung im Detail-Pop-up).
+        keep_entry = self._entry_id_at(self.table.currentRow())
+        keep_scroll = self.table.verticalScrollBar().value()
         # Nach Kartenklasse bucketn; Reihenfolge je Gruppe bleibt (Name).
         buckets: dict[str, list] = {c: [] for c in CATEGORY_ORDER}
         for row in rows:
@@ -232,7 +236,41 @@ class CollectionView(QWidget):
         finally:
             self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
-        self._update_summary(rows)
+        if keep_entry is not None:
+            for r in range(self.table.rowCount()):
+                if self._entry_id_at(r) == keep_entry:
+                    self.table.setCurrentCell(r, 0)
+                    break
+        self.table.verticalScrollBar().setValue(keep_scroll)
+        self._update_summary()
+
+    def _entry_id_at(self, row: int):
+        """entry_id der Tabellenzeile oder None (Kopfzeile/keine Zeile)."""
+        item = self.table.item(row, 0) if row >= 0 else None
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _refresh_group_headers(self) -> None:
+        """Kopfzeilen-Zaehler aus den Mengen-Zellen neu summieren (nach
+        einer Mengenaenderung, ohne die Tabelle neu aufzubauen)."""
+        header, count = None, 0
+
+        def flush():
+            if header is not None:
+                label = header.text().rsplit("  (", 1)[0]
+                header.setText(f"{label}  ({count})")
+
+        self.table.blockSignals(True)
+        try:
+            for r in range(self.table.rowCount()):
+                if self._entry_id_at(r) is None:
+                    flush()
+                    header, count = self.table.item(r, 0), 0
+                else:
+                    qty = self.table.item(r, 1)
+                    count += int(qty.data(Qt.ItemDataRole.EditRole) or 0)
+            flush()
+        finally:
+            self.table.blockSignals(False)
 
     def _add_header_row(self, label: str, count: int) -> None:
         r = self.table.rowCount()
@@ -297,6 +335,7 @@ class CollectionView(QWidget):
         if value < 1:
             return
         ydb.set_collection_quantity(self.repo.db_path, entry_id, value)
+        self._refresh_group_headers()
         self._update_summary()
 
     def _remove_selected(self) -> None:
@@ -367,7 +406,7 @@ class CollectionView(QWidget):
             return
         self.summary.setText(f"Sammlung exportiert nach {path}")
 
-    def _update_summary(self, filtered_rows=None) -> None:
+    def _update_summary(self) -> None:
         entries, unique, total, untranslated = ydb.collection_summary_stats(
             self.repo.db_path
         )
@@ -377,7 +416,13 @@ class CollectionView(QWidget):
         )
         if untranslated:
             text += f"  ·  {untranslated} ohne deutsche Übersetzung"
-        if filtered_rows is not None and self._filters_active():
-            shown = sum(r["quantity"] for r in filtered_rows)
-            text += f"  ·  Filter: {len(filtered_rows)} Einträge ({shown} Karten)"
+        if self._filters_active():
+            # Aus der Tabelle gezaehlt -- bleibt nach Mengenaenderungen aktuell.
+            entries_shown, shown = 0, 0
+            for r in range(self.table.rowCount()):
+                if self._entry_id_at(r) is not None:
+                    entries_shown += 1
+                    qty = self.table.item(r, 1)
+                    shown += int(qty.data(Qt.ItemDataRole.EditRole) or 0)
+            text += f"  ·  Filter: {entries_shown} Einträge ({shown} Karten)"
         self.summary.setText(text)

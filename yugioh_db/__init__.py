@@ -11,7 +11,7 @@ der Module (Importe strikt einbahnig, keine Zyklen):
     schema  -- Ablageorte, Verbindungen, DDL (Basis, importiert nichts)
     api     -- YGOPRODeck-Requests, Bild-Cache, build_database
     updates -- APP_VERSION, Update-Check, Migrations-Backup
-    cards   -- Suche/Filter, Klassifikation, DE-Uebersetzungen
+    cards   -- Klassifikation, DE-Uebersetzungen
     collection / decks -- Benutzerdaten (Bestand, Decks, .ydk)
     combos  -- Kombo-Bibliothek (Bausteine, Rollen, Abdeckung)
     analysis -- Konsistenz-Mathematik, Synergie-Graph, Vorschlaege

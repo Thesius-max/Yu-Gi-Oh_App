@@ -348,17 +348,6 @@ def combo_steps(db_path: str, combo_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def combos_for_card(db_path: str, card_id: int) -> list[sqlite3.Row]:
-    """Alle Kombos, die diese Karte als Baustein verwenden."""
-    with _conn(db_path) as conn:
-        return conn.execute(
-            """SELECT cb.combo_id, cb.name FROM combos cb
-               JOIN combo_cards cc ON cc.combo_id = cb.combo_id
-               WHERE cc.card_id = ? ORDER BY cb.name""",
-            (card_id,),
-        ).fetchall()
-
-
 def _coverage_result(pieces) -> dict:
     """Baut die Coverage-Rueckgabe (total/covered/pieces) aus Baustein-Zeilen
     mit den Feldern needed/have. Gemeinsame Logik von combo_coverage (gegen

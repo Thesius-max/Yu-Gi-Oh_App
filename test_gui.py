@@ -84,6 +84,34 @@ class GuiTests(unittest.TestCase):
         view.adjust("main", +1)          # zweiter Klick wirkt ohne Neu-Anwahl
         self.assertEqual(ydb.deck_counts(self.db, deck)["main"], 3)
 
+    def test_export_path_appends_extension_despite_dot(self):
+        from yugioh_gui.exporting import resolve_export_path
+        exts = {"Text": ".txt", "PDF": ".pdf"}
+        self.assertEqual(
+            resolve_export_path("C:/x/RDA v1.2", "PDF-Datei (*.pdf)", exts, ".txt"),
+            ("C:/x/RDA v1.2.pdf", ".pdf"),
+        )
+        self.assertEqual(
+            resolve_export_path("C:/x/a.PDF", "Text (*.txt)", exts, ".txt"),
+            ("C:/x/a.PDF", ".pdf"),
+        )
+
+    def test_collection_header_and_summary_follow_quantity_edit(self):
+        from PySide6.QtCore import Qt
+        from yugioh_gui.collection import CollectionView
+
+        view = CollectionView(self.repo)
+        view.refresh()
+        view.filter_cat.setCurrentIndex(view.filter_cat.findData("monster"))
+        view._apply_filters()
+        header = view.table.item(0, 0)
+        count = int(header.text().rsplit("(", 1)[1].rstrip(")"))
+        qty = view.table.item(1, 1)
+        old = int(qty.data(Qt.ItemDataRole.EditRole))
+        qty.setData(Qt.ItemDataRole.EditRole, old + 5)   # loest itemChanged aus
+        self.assertTrue(header.text().endswith(f"({count + 5})"))
+        self.assertIn("Filter:", view.summary.text())
+
     def test_variant_label_keeps_indent_after_autosave(self):
         from yugioh_gui.combos import ComboView
 
