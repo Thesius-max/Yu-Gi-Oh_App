@@ -18,6 +18,7 @@ import collections
 import os
 import random
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -103,6 +104,9 @@ class PlayTestViewTests(unittest.TestCase):
                 pt.QMessageBox, "question",
                 staticmethod(lambda *a, **k: CTRL["question"]),
             ),
+            mock.patch.object(
+                pt._RecordSaveDialog, "exec", lambda self: CTRL["save_result"]
+            ),
         ]
         for p in cls.patches:
             p.start()
@@ -119,6 +123,7 @@ class PlayTestViewTests(unittest.TestCase):
             "pile_row": 0, "pile_action": "hold", "menu_pick": None,
             "top_rows": [], "getint": 3,
             "question": self.pt.QMessageBox.StandardButton.Yes,
+            "save_result": QDialog.DialogCode.Accepted,
         })
         from yugioh_gui.repository import CardRepository
 
@@ -185,6 +190,72 @@ class PlayTestViewTests(unittest.TestCase):
         self.assertTrue(h.face_down and h.defense)
         self._menu(h, "→ Hand")
         self.assertFalse(h.face_down or h.defense)
+
+    # -- Recorder -------------------------------------------------------------
+
+    def _combo_count(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM combos").fetchone()[0]
+        finally:
+            conn.close()
+
+    def _place(self, inst, zone):
+        self.v._on_card_clicked(inst)
+        self.v._on_zone_clicked(zone)
+
+    def test_recorder_logs_set_when_turned_face_down(self):
+        v = self.v
+        v._toggle_recording()
+        h = v._hand[0]
+        self._place(h, "s0")
+        self._menu(h, "Verdeckt")
+        m = v._hand[0]
+        self._place(m, "m0")
+        self._menu(m, "Verdeckt")
+        self.assertEqual(v._rec_log, [f"Set {h.name}", f"Set {m.name}"])
+
+    def test_undo_after_save_does_not_resume_recording(self):
+        v = self.v
+        before = self._combo_count()
+        v._toggle_recording()
+        self._place(v._hand[0], "m0")
+        v._finish_recording()                  # speichert
+        self.assertEqual(self._combo_count(), before + 1)
+        v.undo()
+        self.assertFalse(v._recording)
+        v._finish_recording()                  # kein zweites Speichern
+        self.assertEqual(self._combo_count(), before + 1)
+
+    def test_saved_pieces_capped_at_deck_copies(self):
+        v = self.v
+        v._toggle_recording()
+        h = v._hand[0]
+        cid = h.card_id
+        for _ in range(4):                     # dasselbe Exemplar im Kreis
+            inst = next(c for c in v._hand if c.card_id == cid)
+            self._place(inst, "m0")
+            self._menu(inst, "→ Deck (oben)")
+            v.draw()
+        combo_id = v._save_recording("Kreis", None, False)
+        qty = {p["card_id"]: p["needed"]
+               for p in ydb.combo_coverage_collection(self.db, combo_id)["pieces"]}
+        self.assertEqual(qty[cid], v._deck_copies[cid])
+
+    def test_deck_switch_keeps_recording_when_declined(self):
+        v = self.v
+        if v.deck_cb.count() < 2:
+            self.skipTest("braucht zwei Decks")
+        v._toggle_recording()
+        self._place(v._hand[0], "m0")
+        deck = v._deck_id
+        CTRL["question"] = self.pt.QMessageBox.StandardButton.No
+        other = next(i for i in range(v.deck_cb.count())
+                     if v.deck_cb.itemData(i) != deck)
+        v.deck_cb.setCurrentIndex(other)
+        self.assertEqual(v._deck_id, deck)
+        self.assertEqual(v.deck_cb.currentData(), deck)
+        self.assertTrue(v._recording and v._rec_log)
 
     def test_random_actions_keep_card_count(self):
         """Kurzer Fuzz: beliebige Aktionen, Kartenmenge bleibt konstant,

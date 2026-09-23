@@ -12,6 +12,7 @@ import html
 import json
 import os
 import sqlite3
+import threading
 import urllib.request
 from pathlib import Path
 from typing import Iterable, Optional
@@ -66,7 +67,9 @@ def cache_image(card_id: int, image_url: str, image_dir: str = IMAGE_DIR) -> Pat
             data = resp.read()
         # Atomar: erst .part, dann umbenennen -- ein Abbruch hinterlaesst
         # nie eine halbe Datei, die exists() dauerhaft fuer gueltig haelt.
-        tmp = dest.with_name(f"{dest.name}.{os.getpid()}.part")
+        tmp = dest.with_name(
+            f"{dest.name}.{os.getpid()}.{threading.get_ident()}.part"
+        )
         tmp.write_bytes(data)
         os.replace(tmp, dest)
     return dest

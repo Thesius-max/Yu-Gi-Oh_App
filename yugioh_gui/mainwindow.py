@@ -38,6 +38,31 @@ from .tasks import DbTask, DbTaskSignals
 # Hauptfenster
 # ---------------------------------------------------------------------------
 
+class _BusyDialog(QProgressDialog):
+    """Fortschrittsdialog ohne Abbruch: Esc und Fenster-Schliessen wirken
+    nicht, solange das Update schreibt (sonst waere die App mitten im
+    build_database wieder bedienbar). unlock_and_close() beendet ihn."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, "", 0, 0, parent)
+        self._locked = True
+        self.setCancelButton(None)
+
+    def unlock_and_close(self) -> None:
+        self._locked = False
+        self.close()
+
+    def reject(self) -> None:
+        if not self._locked:
+            super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self._locked:
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, db_path: str = ydb.DEFAULT_DB, restore_session: bool = False):
         super().__init__()
@@ -123,9 +148,12 @@ class MainWindow(QMainWindow):
         self.search()
         if self._restore_session:
             self._restore_session_state()
-        # Stiller Hinweis auf neue App-Versionen, kurz nach dem Start (ein
-        # Mini-Request; offline/Fehler bleibt einfach unsichtbar).
-        QTimer.singleShot(2000, lambda: self._check_app_version(manual=False))
+            # Stiller Hinweis auf neue App-Versionen, kurz nach dem Start
+            # (ein Mini-Request; offline/Fehler bleibt einfach unsichtbar).
+            # Nur in der echten Sitzung -- Test-Instanzen gehen nie ins Netz.
+            QTimer.singleShot(
+                2000, lambda: self._check_app_version(manual=False)
+            )
 
     def _build_filter_panel(self) -> QWidget:
         panel = QWidget()
@@ -466,10 +494,10 @@ class MainWindow(QMainWindow):
                 )
                 return
         self._set_data_actions_enabled(False)
-        self._progress = QProgressDialog(
-            "Lade Kartendaten von der YGOPRODeck-API …", "", 0, 0, self
+        # Mitten im Schreiben kein Abbruch (auch nicht per Esc).
+        self._progress = _BusyDialog(
+            "Lade Kartendaten von der YGOPRODeck-API …", self
         )
-        self._progress.setCancelButton(None)  # mitten im Schreiben kein Abbruch
         self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._progress.setWindowTitle("Aktualisierung")
         self._progress.setMinimumDuration(0)
@@ -483,7 +511,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_update_done(self, count) -> None:
-        self._progress.close()
+        self._progress.unlock_and_close()
         self._set_data_actions_enabled(True)
         self._refresh_all()
         version = ydb.local_db_version(self.repo.db_path) or "unbekannt"
@@ -493,7 +521,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_update_failed(self, msg: str) -> None:
-        self._progress.close()
+        self._progress.unlock_and_close()
         self._set_data_actions_enabled(True)
         QMessageBox.warning(
             self, "Aktualisierung fehlgeschlagen",

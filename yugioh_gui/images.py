@@ -26,6 +26,18 @@ from .tasks import ImageLoader, ImageSignals
 # Bei Bedarf gegen die in der API gelieferte card_images-URL austauschbar.
 IMAGE_URL = "https://images.ygoprodeck.com/images/cards/{}.jpg"
 
+_image_pool: QThreadPool | None = None
+
+
+def image_pool() -> QThreadPool:
+    """Eigener Thread-Pool fuer Bild-Downloads: haengende Downloads (bis
+    60 s Timeout) blockieren so nie die DbTasks im globalen Pool."""
+    global _image_pool
+    if _image_pool is None:
+        _image_pool = QThreadPool()
+        _image_pool.setMaxThreadCount(4)
+    return _image_pool
+
 
 def scale_pixmap(pix: QPixmap, w: int, h: int) -> QPixmap:
     """Pixmap auf w×h einpassen (Seitenverhaeltnis erhalten, glatt)."""
@@ -70,6 +82,7 @@ class CardImageView:
         self._img_signals = ImageSignals()
         self._img_signals.loaded.connect(self._on_image_loaded)
         self._img_signals.failed.connect(self._on_image_failed)
+        self._img_loading: set[int] = set()  # laufende Downloads
 
     def _load_image(self, card_id: int) -> None:
         pix = lookup_card_pixmap(
@@ -79,17 +92,22 @@ class CardImageView:
             self.image.setPixmap(pix)
             return
         self.image.setText("Lade …")
-        QThreadPool.globalInstance().start(
+        if card_id in self._img_loading:
+            return
+        self._img_loading.add(card_id)
+        image_pool().start(
             ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
         )
 
     def _on_image_loaded(self, card_id: int, img: QImage) -> None:
+        self._img_loading.discard(card_id)
         pix = scale_pixmap(QPixmap.fromImage(img), self.IMG_W, self.IMG_H)
         QPixmapCache.insert(f"{self._CACHE_PREFIX}:{card_id}", pix)
         if card_id == self.current_id:
             self.image.setPixmap(pix)
 
     def _on_image_failed(self, card_id: int) -> None:
+        self._img_loading.discard(card_id)
         if card_id == self.current_id:
             self.image.setText("(Bild offline nicht verfügbar)")
 
@@ -138,6 +156,7 @@ class HoverCardPreview(QObject):
         self._signals = ImageSignals()
         self._signals.loaded.connect(self._on_loaded)
         self._signals.failed.connect(self._on_failed)
+        self._loading: set[int] = set()   # laufende Downloads (kein Doppel)
 
         view.setMouseTracking(True)
         view.viewport().setMouseTracking(True)
@@ -174,9 +193,11 @@ class HoverCardPreview(QObject):
         self._popup.setFixedSize(self.PREVIEW_W, self.PREVIEW_H)
         self._place()
         self._popup.show()
-        QThreadPool.globalInstance().start(
-            ImageLoader(cid, IMAGE_URL.format(cid), self._signals)
-        )
+        if cid not in self._loading:
+            self._loading.add(cid)
+            image_pool().start(
+                ImageLoader(cid, IMAGE_URL.format(cid), self._signals)
+            )
 
     def _show_pixmap(self, pix: QPixmap) -> None:
         self._popup.setText("")
@@ -186,12 +207,14 @@ class HoverCardPreview(QObject):
         self._popup.show()
 
     def _on_loaded(self, card_id: int, img: QImage) -> None:
+        self._loading.discard(card_id)
         pix = scale_pixmap(QPixmap.fromImage(img), self.PREVIEW_W, self.PREVIEW_H)
         QPixmapCache.insert(f"hover:{card_id}", pix)
         if card_id == self._current and self._popup.isVisible():
             self._show_pixmap(pix)
 
     def _on_failed(self, card_id: int) -> None:
+        self._loading.discard(card_id)
         if card_id == self._current and self._popup.isVisible():
             self._popup.setText("(Bild offline nicht verfügbar)")
 

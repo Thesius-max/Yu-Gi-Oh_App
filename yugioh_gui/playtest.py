@@ -8,9 +8,10 @@ als Kombo mit Heimat-Deck). Der Spielzustand lebt nur in der GUI.
 
 from __future__ import annotations
 
+import collections
 import random
 
-from PySide6.QtCore import QPoint, QThreadPool, QTimer, Qt, Signal
+from PySide6.QtCore import QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QImage, QKeySequence, QPixmap, QPixmapCache, QShortcut, QTransform
 )
@@ -25,8 +26,8 @@ import yugioh_db as ydb
 
 from .carddetail import CardDetailDialog
 from .images import (
-    IMAGE_URL, card_back_pixmap, lookup_card_pixmap, placeholder_pixmap,
-    scale_pixmap
+    IMAGE_URL, card_back_pixmap, image_pool, lookup_card_pixmap,
+    placeholder_pixmap, scale_pixmap,
 )
 from ._cardinst import _CardInst
 from .repository import CardRepository
@@ -265,6 +266,7 @@ class PlayTestView(QWidget):
         self._deck: list[int] = []
         self._extra: list[int] = []
         self._extra_ids: set[int] = set()  # card_ids, die ins Extra Deck gehoeren
+        self._deck_copies: dict[int, int] = {}  # Kopien je Karte (Main+Extra)
         self._hand: list[_CardInst] = []
         self._mzones: list = [None] * 5
         self._szones: list = [None] * 5
@@ -284,6 +286,7 @@ class PlayTestView(QWidget):
         self._rec_ns_used = False               # NS-Heuristik: 1x je Aufnahme
         self._rec_last_ed: int | None = None    # letzter ED-SS = Boss-Vorschlag
         self._rec_start: list[str] = []         # Starthand bei Aufnahmebeginn
+        self._rec_last_uid: int | None = None   # Exemplar des letzten Schritts
 
         # Nachladen fehlender Bilder (meist sind sie lokal gecacht).
         self._loading_imgs: set[int] = set()
@@ -406,24 +409,34 @@ class PlayTestView(QWidget):
             self._render()
 
     def _on_deck_selected(self, _index: int) -> None:
+        if not self._confirm_discard_recording():
+            # Auswahl auf das bisherige Deck zuruecksetzen.
+            self.deck_cb.blockSignals(True)
+            self.deck_cb.setCurrentIndex(max(self.deck_cb.findData(self._deck_id), 0))
+            self.deck_cb.blockSignals(False)
+            return
         self._deck_id = self.deck_cb.currentData()
         self.reset()
 
     def _hand_size(self) -> int:
         return self.hand_size_cb.currentData() or 5
 
+    def _confirm_discard_recording(self) -> bool:
+        """True, wenn keine Aufzeichnung laeuft oder der Benutzer sie
+        verwerfen will (neue Starthand, Deckwechsel)."""
+        if not (self._recording and self._rec_log):
+            return True
+        answer = QMessageBox.question(
+            self, "Aufzeichnung verwerfen?",
+            "Eine Kombo-Aufzeichnung läuft. Das verwirft die "
+            f"{len(self._rec_log)} protokollierten Schritte — fortfahren?",
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def _reset_clicked(self) -> None:
         """Button-Variante von reset(): warnt, wenn eine Aufzeichnung läuft."""
-        if self._recording and self._rec_log:
-            answer = QMessageBox.question(
-                self, "Aufzeichnung verwerfen?",
-                "Eine Kombo-Aufzeichnung läuft. Eine neue Starthand "
-                f"verwirft die {len(self._rec_log)} protokollierten "
-                "Schritte — fortfahren?",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        self.reset()
+        if self._confirm_discard_recording():
+            self.reset()
 
     def reset(self) -> None:
         """Feld/Hand leeren, Deck+Extra neu laden, mischen, Starthand ziehen.
@@ -445,6 +458,9 @@ class PlayTestView(QWidget):
             self._deck = list(data["main"])
             self._extra = list(data["extra"])
             self._extra_ids = set(data["extra"])
+            self._deck_copies = dict(
+                collections.Counter(data["main"]) + collections.Counter(data["extra"])
+            )
             random.shuffle(self._deck)
             for _ in range(self._hand_size()):
                 if self._deck:
@@ -452,6 +468,7 @@ class PlayTestView(QWidget):
         else:
             self._names, self._deck, self._extra = {}, [], []
             self._extra_ids = set()
+            self._deck_copies = {}
         self._render()
 
     def _mk_inst(self, card_id: int) -> _CardInst:
@@ -480,7 +497,8 @@ class PlayTestView(QWidget):
             "ban": [si(c) for c in self._banished],
             "rec": (self._recording, list(self._rec_log),
                     dict(self._rec_used), self._rec_ns_used,
-                    self._rec_last_ed, list(self._rec_start)),
+                    self._rec_last_ed, list(self._rec_start),
+                    self._rec_last_uid),
         })
         del self._undo[:-self._UNDO_MAX]
 
@@ -499,7 +517,8 @@ class PlayTestView(QWidget):
         self._gy = [_CardInst.from_tuple(t) for t in s["gy"]]
         self._banished = [_CardInst.from_tuple(t) for t in s["ban"]]
         (self._recording, self._rec_log, self._rec_used,
-         self._rec_ns_used, self._rec_last_ed, self._rec_start) = s["rec"]
+         self._rec_ns_used, self._rec_last_ed, self._rec_start,
+         self._rec_last_uid) = s["rec"]
         self._held = None
         self._render()
 
@@ -511,6 +530,7 @@ class PlayTestView(QWidget):
         if not self._recording:
             return
         self._rec_log.append(text)
+        self._rec_last_uid = inst.uid if inst is not None else None
         if inst is not None:
             self._rec_used[inst.uid] = inst.card_id
 
@@ -562,6 +582,7 @@ class PlayTestView(QWidget):
         self._rec_ns_used = False
         self._rec_last_ed = None
         self._rec_start = [c.name for c in self._hand]
+        self._rec_last_uid = None
         self._render()
 
     def _stop_recording(self) -> None:
@@ -571,6 +592,16 @@ class PlayTestView(QWidget):
         self._rec_ns_used = False
         self._rec_last_ed = None
         self._rec_start = []
+        self._rec_last_uid = None
+
+    def _end_recording(self) -> None:
+        """Aufzeichnung beenden (gespeichert/verworfen) -- auch in allen
+        Undo-Snapshots, sonst schaltet Strg+Z sie wieder ein und ein
+        zweites Speichern legt die Kombo doppelt an."""
+        self._stop_recording()
+        neutral = (False, [], {}, False, None, [], None)
+        for snap in self._undo:
+            snap["rec"] = neutral
 
     def _end_board_text(self) -> str:
         """Offene Feldkarten als 'End:'-Zeile (verdeckte nur gezählt)."""
@@ -599,13 +630,14 @@ class PlayTestView(QWidget):
             self._rec_last_ed, self,
         )
         result = dlg.exec()
+        dlg.deleteLater()
         if result == QDialog.DialogCode.Accepted:
             name, boss_id, with_notes = dlg.values()
             combo_id = self._save_recording(name, boss_id, with_notes)
             if self.open_combo_callback is not None:
                 self.open_combo_callback(combo_id)
         elif result == _RecordSaveDialog.DISCARD:
-            self._stop_recording()
+            self._end_recording()
             self._render()
         # Rejected ('Weiter aufzeichnen'): Zustand unverändert lassen.
 
@@ -621,6 +653,9 @@ class PlayTestView(QWidget):
         for cid in self._rec_used.values():
             counts[cid] = counts.get(cid, 0) + 1
         for cid, qty in counts.items():
+            # Ein Exemplar, das ins Deck zurueck und neu gezogen wurde, hat
+            # eine neue uid -- mehr Kopien als im Deck gibt es aber nicht.
+            qty = min(qty, self._deck_copies.get(cid, qty))
             ydb.add_combo_card(db, combo_id, cid, qty)
         ydb.set_combo_steps(db, combo_id, list(self._rec_log))
         if boss_id is not None:
@@ -629,7 +664,7 @@ class PlayTestView(QWidget):
             start = ", ".join(self._rec_start) if self._rec_start else "—"
             notes = f"Start: {start}\nEnd: {self._end_board_text()}"
             ydb.update_combo(db, combo_id, name, None, notes)
-        self._stop_recording()
+        self._end_recording()
         self._render()
         return combo_id
 
@@ -682,7 +717,9 @@ class PlayTestView(QWidget):
             actions=[("Auf die Hand", "hand"), ("Aufnehmen", "hold"),
                      ("→ Friedhof", "gy"), ("→ Verbannt", "banish")],
         )
-        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected >= 0:
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        dlg.deleteLater()
+        if accepted and dlg.selected >= 0:
             self._push_undo()
             cid = pairs[dlg.selected][1]
             self._deck.remove(cid)
@@ -707,7 +744,9 @@ class PlayTestView(QWidget):
             return
         titles = {"extra": "Extra-Deck", "gy": "Friedhof", "banished": "Verbannt"}
         dlg = _PileDialog(titles[kind], labels, self, actions=actions)
-        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected >= 0:
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        dlg.deleteLater()
+        if accepted and dlg.selected >= 0:
             self._push_undo()
             i = dlg.selected
             if kind == "extra":
@@ -737,6 +776,7 @@ class PlayTestView(QWidget):
         del self._deck[:n]
         dlg = _TopDeckDialog(top, self._names, self)
         dlg.exec()
+        dlg.deleteLater()
         for cid, action in dlg.moves:
             if action == "bottom":
                 self._deck.append(cid)
@@ -857,6 +897,13 @@ class PlayTestView(QWidget):
         if chosen is a_face:
             was_set = inst.face_down
             inst.face_down = not inst.face_down
+            # Direkt nach dem Ablegen verdeckt gelegt = gesetzt: den eben
+            # protokollierten 'Act X'/'NS X' dieses Exemplars zu 'Set X'.
+            if (inst.face_down and self._recording and self._rec_log
+                    and self._rec_last_uid == inst.uid):
+                kw, _, rest = self._rec_log[-1].partition(" ")
+                if kw in ("Act", "NS"):
+                    self._rec_log[-1] = f"Set {rest}"
             # Aufdecken in der Zauber/Fallen- oder Feldzone = Aktivierung.
             if was_set and not inst.face_down and (
                 inst is self._field
@@ -911,7 +958,7 @@ class PlayTestView(QWidget):
         if card_id in self._loading_imgs:
             return
         self._loading_imgs.add(card_id)
-        QThreadPool.globalInstance().start(
+        image_pool().start(
             ImageLoader(card_id, IMAGE_URL.format(card_id), self._img_signals)
         )
 
