@@ -77,15 +77,28 @@ Datenbank existiert.
 ## Tests
 
 ```bash
-python -m unittest test_yugioh_db
+QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -t .
 ```
 
-Die Tests prüfen die Datenschicht (3-Kopien-Regel, Zonen-Zuordnung,
-Sammlung-Zusammenführung, Übersetzungen, YDK-Im-/Export, Kombo-Abdeckung,
-Konsistenz-Mathematik) – reine Standardbibliothek, kein zusätzliches Paket.
-Schreibende Tests laufen gegen eine Temp-Kopie der lokalen `yugioh.sqlite3`
-(die Datei selbst bleibt unangetastet); fehlt sie, werden diese Tests
-übersprungen, die Tests reiner Funktionen laufen weiterhin.
+Die Suite im Ordner `tests/` (unittest, kein zusätzliches Paket nötig)
+umfasst Unit-Tests je Modul der Datenschicht (3-Kopien-Regel, Zonen,
+Sammlung, Übersetzungen, YDK-Im-/Export, Kombos, Konsistenz-Mathematik,
+Korpus/Vorschläge, Exporte, Daten-Update, App-Update-Check, CLI),
+Offscreen-Tests der Oberfläche (Dialoge, Tabs, Spielfeld) und
+End-to-End-Abläufe über das echte Hauptfenster (Suche → Sammlung/Deck,
+Deck-Datei-Roundtrip, Kombo-Lebenszyklus, Spielfeld-Recorder,
+Kartendaten-Update ohne Datenverlust). Architektur-Regeln (Datenschicht
+nur Standardbibliothek, Views unabhängig) werden statisch geprüft.
+
+Alle Tests laufen offline gegen eine Temp-Kopie der lokalen
+`yugioh.sqlite3` (die Datei selbst bleibt unangetastet); fehlt sie, laufen
+nur die Tests reiner Funktionen, der Rest wird übersprungen.
+Testabdeckung messen (optional, `pip install -r requirements-dev.txt`):
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m coverage run --branch --source=yugioh_db,yugioh_gui -m unittest discover -s tests -t .
+python -m coverage report
+```
 
 ## Bedienung in Kürze
 
@@ -159,7 +172,8 @@ yugioh_db/           Datenschicht als Paket: API-Abruf, SQLite-Schema, Suche,
                      Standardbibliothek; CLI: python -m yugioh_db)
 yugioh_gui/          PySide6-Oberfläche als Paket: je Tab ein Modul, dazu
                      Theme, Bild-Cache, Labels und das Hauptfenster
-test_yugioh_db.py    unittest-Suite für die Datenschicht
+tests/               unittest-Suite: Unit-, GUI- und End-to-End-Tests
+                     (gemeinsame Helfer in tests/_support.py)
 build_app.py         Erzeugt das verteilbare PyInstaller-Bundle
 TESTER_LIESMICH.txt  Anleitung, die mit ins Tester-Bundle gelegt wird
 requirements.txt     Abhängigkeiten

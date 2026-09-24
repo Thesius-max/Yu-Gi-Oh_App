@@ -5,38 +5,28 @@ Offscreen-Tests fuer den Spielfeld-Tab (PlayTestView): Karten duerfen weder
 verloren gehen noch sich verdoppeln, Extra-Deck-Monster bleiben im Extra
 Deck, der Recorder protokolliert sauber.
 
-Wie test_yugioh_db: gegen eine Temp-Kopie der Dev-DB, keine Mock-Karten,
+Wie die DB-Tests (tests/_support.py): gegen eine Temp-Kopie der Dev-DB, keine Mock-Karten,
 kein Netz (cache_image wird abgeschaltet). Modale Dialoge/Menues werden
 durch Stubs ersetzt, die eine vorgegebene Wahl treffen.
 
-    python -m unittest test_playtest
+    python -m unittest tests.test_playtest
 """
 
 from __future__ import annotations
 
 import collections
-import os
 import random
-import shutil
 import sqlite3
-import tempfile
 import unittest
 from unittest import mock
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import yugioh_db as ydb
 
-DEV_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yugioh.sqlite3")
-HAS_DEV_DB = os.path.exists(DEV_DB)
+from tests._support import HAS_QT, copy_dev_db, needs_qt, remove_tree
 
-try:
+if HAS_QT:
     from PySide6.QtCore import QEvent, QPoint
     from PySide6.QtWidgets import QApplication, QDialog, QMenu
-
-    HAS_QT = True
-except ImportError:  # pragma: no cover
-    HAS_QT = False
 
 
 # Gemeinsame Steuerung der Stubs: was "der Benutzer" im Dialog/Menue waehlt.
@@ -76,14 +66,12 @@ if HAS_QT:
             return None
 
 
-@unittest.skipUnless(HAS_DEV_DB and HAS_QT, "Dev-DB oder PySide6 fehlt")
+@needs_qt
 class PlayTestViewTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
-        cls.tmpdir = tempfile.mkdtemp()
-        cls.db = os.path.join(cls.tmpdir, "dev.sqlite3")
-        shutil.copy(DEV_DB, cls.db)
+        cls.tmpdir, cls.db = copy_dev_db()
         from yugioh_gui import playtest as pt
 
         cls.pt = pt
@@ -115,7 +103,8 @@ class PlayTestViewTests(unittest.TestCase):
     def tearDownClass(cls):
         for p in cls.patches:
             p.stop()
-        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        remove_tree(cls.tmpdir)
 
     def setUp(self):
         CTRL.clear()
@@ -129,6 +118,13 @@ class PlayTestViewTests(unittest.TestCase):
 
         random.seed(1)
         self.v = self.pt.PlayTestView(CardRepository(self.db))
+        # Fest das Referenz-Deck waehlen statt 'erstes nach Name' -- ein neu
+        # angelegtes Deck in der Dev-DB soll die Tests nicht verschieben.
+        idx = self.v.deck_cb.findText("RDA-Mitsu")
+        self.assertGreaterEqual(idx, 0, "Dev-DB braucht das Deck 'RDA-Mitsu'")
+        self.v.deck_cb.setCurrentIndex(idx)
+        random.seed(1)
+        self.v.reset()
         self.assertIsNotNone(self.v._deck_id, "Dev-DB braucht ein Deck")
         self.assertTrue(self.v._extra, "Test-Deck braucht ein Extra Deck")
 

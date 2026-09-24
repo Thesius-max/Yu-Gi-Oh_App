@@ -4,7 +4,7 @@ test_cardinst.py
 Tests fuer _CardInst (yugioh_gui._cardinst) -- die reine Datenklasse
 des Spielfelds. Keine Qt-Abhaengigkeit, kein DB-Zugriff, laeuft immer.
 
-    QT_QPA_PLATFORM=offscreen python -m unittest test_cardinst
+    QT_QPA_PLATFORM=offscreen python -m unittest tests.test_cardinst
 """
 
 from __future__ import annotations
