@@ -364,8 +364,7 @@ class CorpusEdgeTests(CardIdsTestCase):
         edges = ydb.corpus_edges(self.db)
         self.assertTrue(edges)
         self.assertFalse({c for pair in edges for c in pair} & staples,
-                         f"Staples mit Kante bei {n} Listen -- vermutlich der Float-"
-                         "Befund, siehe test_staple_ppmi_is_exactly_zero_for_15_lists")
+                         f"Staples mit Kante bei {n} Listen")
 
     def test_ppmi_matches_counts_for_equal_weights(self):
         # Alle Listen haben denselben Stand -> Gewichte kuerzen sich heraus.
@@ -377,14 +376,11 @@ class CorpusEdgeTests(CardIdsTestCase):
             expected = math.log(n_ab * n / (len(per_card[a]) * len(per_card[b])))
             self.assertAlmostEqual(e["weight"], expected, places=9)
 
-    @unittest.expectedFailure
     def test_staple_ppmi_is_exactly_zero_for_15_lists(self):
-        """BEFUND (2026-09-24): Bei 15 gleich alten Listen weichen
-        sum(weights) und die Aufsummierung je Karte im letzten Bit ab.
-        Staples bekommen dann PPMI ~2.2e-16 statt 0 -- es entstehen
-        Schein-Kanten, und der Staple taucht als Vorschlag mit 'Score 0,0'
-        auf. Moegliche Korrektur: 'if ppmi > 1e-9' statt 'if ppmi > 0' in
-        corpus_edges (bzw. total_w aus derselben Summation bilden)."""
+        """Regression (2026-09-24): Bei 15 gleich alten Listen weichen
+        sum(weights) und die Aufsummierung je Karte im letzten Bit ab --
+        Staples bekamen PPMI ~2.2e-16 statt 0 (Schein-Kanten, Vorschlag
+        mit 'Score 0,0'). Behoben ueber _PPMI_EPSILON in corpus_edges."""
         for r in ydb.list_reference_decks(self.db):
             ydb.delete_deck(self.db, r["deck_id"])
         staple, *others = self.main_ids(6)
@@ -396,6 +392,13 @@ class CorpusEdgeTests(CardIdsTestCase):
         edges = ydb.corpus_edges(self.db)
         self.assertTrue(edges)                       # die anderen Karten verbinden sich
         self.assertEqual([k for k in edges if staple in k], [])
+        # Folge im Vorschlags-Reiter: kein Staple mit Score ~0.
+        deck = ydb.create_deck(self.db, "T")
+        ydb.add_card_to_deck(self.db, deck, others[0])
+        scores = {s["card_id"]: s["score"] for s in
+                  ydb.deck_suggestions(self.db, deck, limit=500)["suggestions"]}
+        self.assertNotIn(staple, scores)
+        self.assertTrue(all(v > analysis._PPMI_EPSILON for v in scores.values()))
 
     def test_no_reference_decks_no_edges(self):
         for r in ydb.list_reference_decks(self.db):

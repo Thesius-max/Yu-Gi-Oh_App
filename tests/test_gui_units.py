@@ -298,7 +298,8 @@ class DialogTests(QtTestCase):
 
         self.ui.open_paths.append((path, ""))
         self.ui.dialogs["_ReferenceMetaDialog"] = fill_meta
-        dlg._import()
+        with self.assert_no_resource_warnings():         # Datei wird geschlossen
+            dlg._import()
         self.assertEqual(dlg.listing.count(), n_refs + 1)
         self.assertEqual(dlg.listing.item(0).text(),         # neueste zuerst
                          f"Meta Liste — 2099-01-01 — Test-Turnier  ({n_cards} Karten)")

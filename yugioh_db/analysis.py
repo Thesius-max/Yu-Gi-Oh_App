@@ -290,6 +290,10 @@ _CORPUS_WEIGHT = 0.5
 # Je Kandidat gehen nur die staerksten PMI-Verbindungen in den Score ein,
 # sonst schlaegt die schiere Deckgroesse jede Kombo-Evidenz.
 _CORPUS_TOP_LINKS = 5
+# PPMI unterhalb dieser Schwelle gilt als 0: total_w und die Summen je Karte
+# entstehen in unterschiedlicher Reihenfolge, ein Staple (in jeder Liste)
+# landet sonst bei ~2e-16 statt 0 -- Schein-Kante plus Vorschlag 'Score 0,0'.
+_PPMI_EPSILON = 1e-9
 
 
 def synergy_edges(db_path: str) -> dict[tuple[int, int], dict]:
@@ -371,7 +375,7 @@ def corpus_edges(db_path: str) -> dict[tuple[int, int], dict]:
         if pair_n[(a, b)] < _CORPUS_MIN_DECKS:
             continue
         ppmi = max(0.0, math.log(w_ab * total_w / (card_w[a] * card_w[b])))
-        if ppmi > 0:
+        if ppmi > _PPMI_EPSILON:
             edges[(a, b)] = {
                 "weight": ppmi, "decks": pair_n[(a, b)], "total": n_decks,
             }

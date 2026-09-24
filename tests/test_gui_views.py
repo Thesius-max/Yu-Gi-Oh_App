@@ -322,7 +322,7 @@ class DeckViewTests(_ViewTestCase):
         self.assertRegex(view.sim_verdict.text(), r"^(✓ Hand enthält einen Starter\.|✗ Brick)")
 
     def test_simulator_keeps_checks_across_refresh(self):
-        view = self._view()
+        view = self._view(self.own_deck())
         view.sim_cards.item(0).setCheckState(Qt.CheckState.Checked)
         view.refresh()
         self.assertEqual(view.sim_cards.item(0).checkState(), Qt.CheckState.Checked)
@@ -400,7 +400,8 @@ class DeckViewTests(_ViewTestCase):
             fh.write(ydb.export_deck_ydk(self.db, source) + "kaputt\n")
         self.ui.open_paths.append((path, ""))
         self.ui.texts.append(("AAA Import", True))
-        view._import_deck()
+        with self.assert_no_resource_warnings():         # Datei wird geschlossen
+            view._import_deck()
         self.assertEqual(view.deck_cb.currentText(), "AAA Import")
         self.assertEqual(ydb.deck_counts(self.db, view.deck_id), ydb.deck_counts(self.db, source))
         self.assertEqual(self.ui.titles(), ["Deck importiert"])      # 'kaputt' gemeldet

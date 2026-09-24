@@ -419,7 +419,8 @@ class DeckView(QWidget):
         if not path:
             return
         try:
-            text = open(path, "r", encoding="utf-8-sig", errors="replace").read()
+            with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+                text = fh.read()
         except OSError as exc:
             QMessageBox.warning(self, "Import fehlgeschlagen", str(exc))
             return

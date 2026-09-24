@@ -22,6 +22,7 @@ Bausteine:
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import os
 import shutil
@@ -29,6 +30,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -421,6 +423,18 @@ class QtTestCase(DevDbTestCase):
 
     def _check_no_unexpected_dialogs(self):
         self.assertEqual(self.ui.unexpected, [], "unerwarteter modaler Dialog")
+
+    @contextlib.contextmanager
+    def assert_no_resource_warnings(self):
+        """Offen gelassene Dateien/Handles im Block melden. ResourceWarnings
+        entstehen im Destruktor und koennen dort nicht werfen -- darum
+        mitschneiden und nach gc.collect() pruefen."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            yield
+            gc.collect()
+        leaks = [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)]
+        self.assertEqual(leaks, [], "offen gelassene Ressourcen")
 
     def track(self, widget):
         """Widget am Testende schliessen und abraeumen (vor dem Loeschen der
