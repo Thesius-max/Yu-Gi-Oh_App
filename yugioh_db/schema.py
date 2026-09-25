@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS cards (
     attribute   TEXT,                  -- LIGHT, DARK, ...
     archetype   TEXT,
     scale       INTEGER,               -- Pendulum-Skala (sonst NULL)
-    link_value  INTEGER                -- Link-Wert (sonst NULL)
+    link_value  INTEGER,               -- Link-Wert (sonst NULL)
+    link_markers TEXT                  -- Link-Pfeile, kommagetrennt wie die
+                                       -- API ('Top,Bottom-Left'; sonst NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_cards_type      ON cards(type);
@@ -217,6 +219,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for table, col, decl in (
         ("cards", "name_de", "TEXT"),
         ("cards", "desc_de", "TEXT"),
+        ("cards", "link_markers", "TEXT"),
         ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
         ("combos", "deck_id", "INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL"),
         ("combos", "parent_combo_id",

@@ -78,6 +78,25 @@ class LegacyDeckTests(CardIdsTestCase):
         self.assertEqual(play["main"].count(self.main_id), 3)
         self.assertEqual(play["extra"], [self.extra_id])
         self.assertIn(self.main_id, play["names"])
+        self.assertEqual(set(play["info"]), set(play["names"]))
+        info = play["info"][self.extra_id]
+        self.assertEqual(info["name"], play["names"][self.extra_id])
+        self.assertEqual(ydb.deck_zone_for(info["frame_type"], info["type"]), "extra")
+
+    def test_play_info_link_markers(self):
+        markers = self.set_real_link_markers()
+        ids = list(markers) + [self.main_id, 999_999_999_999]
+        info = ydb.card_play_info(self.db, ids)
+        self.assertNotIn(999_999_999_999, info)            # unbekannt -> fehlt
+        for cid, m in markers.items():
+            self.assertEqual(info[cid]["link_markers"], tuple(m.split(",")))
+            self.assertEqual(info[cid]["frame_type"], "link")
+        self.assertIsNone(info[self.main_id]["link_markers"])
+        self.assertEqual(ydb.card_play_info(self.db, []), {})
+        deck = self.own_deck()
+        play = ydb.deck_play_lists(self.db, deck)
+        for cid in set(markers) & set(play["extra"]):
+            self.assertEqual(play["info"][cid]["link_markers"], info[cid]["link_markers"])
 
     def test_deck_corpus_diff(self):
         # Eigenes Deck vs. Referenz-Liste, kopiengenau (Main+Extra).

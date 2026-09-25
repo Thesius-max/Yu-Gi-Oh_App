@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from .cards import deck_zone_for
+from .cards import PLAY_INFO_COLUMNS, deck_zone_for, play_info_from_row
 from .schema import _conn
 
 
@@ -470,13 +470,13 @@ def import_deck_ydk(
 def deck_play_lists(db_path: str, deck_id: int) -> dict:
     """Karten fuer den Spielfeld-Test: Main- und Extra-Deck je als nach Kopien
     expandierte card_id-Liste (jede Kopie = ein ziehbares Exemplar) plus
-    Anzeigenamen. Side bleibt aussen vor (es wird aus dem Main gezogen, das
-    Extra ist sein eigener Stapel). Rueckgabe:
-      {'main': [card_id, ...], 'extra': [card_id, ...], 'names': {id: name}}."""
+    Anzeigenamen und Regel-Werten. Side bleibt aussen vor (es wird aus dem
+    Main gezogen, das Extra ist sein eigener Stapel). Rueckgabe:
+      {'main': [card_id, ...], 'extra': [card_id, ...], 'names': {id: name},
+       'info': {id: play_info}}  (play_info siehe cards.play_info_from_row)."""
     with _conn(db_path) as conn:
         rows = conn.execute(
-            """SELECT dc.card_id, dc.zone, dc.quantity,
-                      COALESCE(c.name_de, c.name) AS name
+            f"""SELECT dc.card_id, dc.zone, dc.quantity, {PLAY_INFO_COLUMNS}
                FROM deck_cards dc JOIN cards c ON c.id = dc.card_id
                WHERE dc.deck_id = ? AND dc.zone IN ('main', 'extra')""",
             (deck_id,),
@@ -484,11 +484,13 @@ def deck_play_lists(db_path: str, deck_id: int) -> dict:
     main: list[int] = []
     extra: list[int] = []
     names: dict[int, str] = {}
+    info: dict[int, dict] = {}
     for r in rows:
         names[r["card_id"]] = r["name"]
+        info[r["card_id"]] = play_info_from_row(r)
         target = main if r["zone"] == "main" else extra
         target.extend([r["card_id"]] * int(r["quantity"]))
-    return {"main": main, "extra": extra, "names": names}
+    return {"main": main, "extra": extra, "names": names, "info": info}
 
 
 def _deck_zone_cards(conn: sqlite3.Connection, deck_id: int) -> dict[int, dict]:

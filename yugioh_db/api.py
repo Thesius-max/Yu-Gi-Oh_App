@@ -154,8 +154,8 @@ def build_database(
                 """INSERT INTO cards
                    (id, name, type, frame_type, description, atk, def,
                     level, race, attribute, archetype, scale, link_value,
-                    name_de, desc_de)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    link_markers, name_de, desc_de)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                        name=excluded.name,
                        type=excluded.type,
@@ -169,6 +169,7 @@ def build_database(
                        archetype=excluded.archetype,
                        scale=excluded.scale,
                        link_value=excluded.link_value,
+                       link_markers=excluded.link_markers,
                        name_de=excluded.name_de,
                        desc_de=excluded.desc_de""",
                 (
@@ -185,6 +186,7 @@ def build_database(
                     c.get("archetype"),
                     c.get("scale"),
                     c.get("linkval"),
+                    ",".join(c.get("linkmarkers") or []) or None,
                     _unescape(de.get("name")),
                     de.get("desc"),
                 ),

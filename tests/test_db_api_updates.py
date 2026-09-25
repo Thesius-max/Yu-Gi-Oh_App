@@ -161,6 +161,24 @@ class FullUpdateTests(DevDbTestCase):
             "SELECT set_name, set_code FROM card_sets WHERE card_id = ?", (cid,))],
             [("Neu", "NEU-001")])
 
+    def test_link_markers_are_stored_and_survive_updates(self):
+        link = next(iter(self.REAL_LINK_MARKERS))
+        cards, de = api_payload_from_db(self.db)
+        for c in cards:
+            if c["id"] == link:
+                self.assertIsNone(c["linkmarkers"])      # Dev-DB: noch leer
+                c["linkmarkers"] = self.REAL_LINK_MARKERS[link].split(",")
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        sql = "SELECT link_markers FROM cards WHERE id = ?"
+        self.assertEqual(self.scalar(sql, (link,)), self.REAL_LINK_MARKERS[link])
+        # Zweiter Lauf aus der aktualisierten DB: Pfeile bleiben (UPSERT).
+        cards, de = api_payload_from_db(self.db)
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        self.assertEqual(self.scalar(sql, (link,)), self.REAL_LINK_MARKERS[link])
+        self.assertIsNone(self.scalar(sql, (self.main_ids(1)[0],)))
+
     def test_update_into_fresh_database(self):
         cards, _de = api_payload_from_db(self.db)
         cards = cards[:50]

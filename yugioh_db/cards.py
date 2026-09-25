@@ -118,3 +118,42 @@ def card_category(card_type: Optional[str]) -> str:
     if "Monster" in t:
         return "monster"
     return "other"
+
+
+# Spalten fuer die Spielfeld-Regeln (Beschwoerungen, Material, Zonen, Kampf).
+PLAY_INFO_COLUMNS = (
+    "c.id, COALESCE(c.name_de, c.name) AS name, c.type, c.frame_type, "
+    "c.level, c.atk, c.def, c.race, c.attribute, c.scale, c.link_value, "
+    "c.link_markers"
+)
+
+
+def play_info_from_row(row) -> dict:
+    """Regel-relevante Kartenwerte als dict (Zeile mit PLAY_INFO_COLUMNS).
+    'link_markers' ist ein Tupel der API-Pfeilnamen ('Top', 'Bottom-Left',
+    ...); None bei Link-Monstern heisst *unbekannt* (Kartendaten aelter als
+    die Spalte), bei allen anderen Karten 'keine Pfeile'."""
+    markers = row["link_markers"]
+    return {
+        "name": row["name"], "type": row["type"] or "",
+        "frame_type": row["frame_type"] or "",
+        "level": row["level"], "atk": row["atk"], "def": row["def"],
+        "race": row["race"], "attribute": row["attribute"],
+        "scale": row["scale"], "link_value": row["link_value"],
+        "link_markers": tuple(markers.split(",")) if markers else None,
+    }
+
+
+def card_play_info(db_path: str, card_ids) -> dict[int, dict]:
+    """{card_id: play_info} fuer beliebige Karten (z. B. Gegner-Karten auf
+    dem Spielfeld). Unbekannte IDs fehlen im Ergebnis."""
+    ids = sorted({int(i) for i in card_ids})
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT {PLAY_INFO_COLUMNS} FROM cards c WHERE c.id IN ({marks})",
+            ids,
+        ).fetchall()
+    return {r["id"]: play_info_from_row(r) for r in rows}

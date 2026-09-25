@@ -73,6 +73,27 @@ def copy_dev_db() -> tuple[str, str]:
     return folder, db
 
 
+# Echte Link-Pfeile (YGOPRODeck, geprueft 2026-09-25) fuer die Link-Monster
+# im Extra Deck von 'RDA-Mitsu' -- die Dev-DB ist aelter als die Spalte
+# link_markers und hat dort NULL.
+REAL_LINK_MARKERS = {
+    29301450: "Left,Right",                 # S:P Little Knight
+    65741786: "Bottom-Left,Bottom-Right",   # I:P Masquerena
+}
+
+
+def write_real_link_markers(db: str) -> dict[int, str]:
+    """Echte Link-Pfeile in eine (migrierte) Kopie schreiben."""
+    conn = ydb._connect(db)
+    try:
+        conn.executemany("UPDATE cards SET link_markers = ? WHERE id = ?",
+                         [(m, cid) for cid, m in REAL_LINK_MARKERS.items()])
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(REAL_LINK_MARKERS)
+
+
 def remove_tree(folder: str) -> None:
     """Temp-Ordner loeschen und PRUEFEN, dass er weg ist. Unter Windows
     haelt eine offene SQLite-Verbindung die Datei fest -- rmtree mit
@@ -125,6 +146,8 @@ def api_payload_from_db(
             "race": r["race"], "attribute": r["attribute"],
             "archetype": r["archetype"], "scale": r["scale"],
             "linkval": r["link_value"], "card_sets": sets.get(r["id"], []),
+            "linkmarkers": (r["link_markers"] or "").split(",")
+                           if r["link_markers"] else None,
         })
         name_de, desc_de = r["name_de"], r["desc_de"]
         if de_override is not None:
@@ -193,6 +216,13 @@ class DevDbTestCase(unittest.TestCase):
         )
         self.assertEqual(len(rows), n, f"Dev-DB hat keine {n} Karten fuer: {where}")
         return [r[0] for r in rows]
+
+    REAL_LINK_MARKERS = REAL_LINK_MARKERS
+
+    def set_real_link_markers(self) -> dict[int, str]:
+        """Traegt die echten Link-Pfeile in die Kopie ein (Rueckgabe wie
+        REAL_LINK_MARKERS)."""
+        return write_real_link_markers(self.db)
 
     # Kombos werden in Tests selbst gesaet; 'frisch' = in keiner Kombo, damit
     # Rollen-Kopien vorhersagbar bleiben.
