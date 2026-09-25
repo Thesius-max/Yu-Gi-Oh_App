@@ -47,7 +47,7 @@ class TestCardInst(unittest.TestCase):
         c = _CardInst(300, "Raigeki", face_down=True, defense=False,
                       origin="ED")
         t = c.to_tuple()
-        self.assertEqual(t, (300, "Raigeki", True, False, c.uid, "ED"))
+        self.assertEqual(t[:6], (300, "Raigeki", True, False, c.uid, "ED"))
         restored = _CardInst.from_tuple(t)
         self.assertEqual(restored.card_id, c.card_id)
         self.assertEqual(restored.name, c.name)
@@ -55,6 +55,29 @@ class TestCardInst(unittest.TestCase):
         self.assertEqual(restored.defense, c.defense)
         self.assertEqual(restored.uid, c.uid)
         self.assertEqual(restored.origin, c.origin)
+
+    def test_field_state_roundtrip_with_nested_materials(self):
+        """Xyz-Material (Exemplare unter der Karte) wird rekursiv
+        serialisiert; uids und Spielfeld-Zustand ueberleben."""
+        mat = _CardInst(10, "Mat", counters=1)
+        xyz = _CardInst(20, "Xyz", owner="opp", counters=2, atk_mod=500,
+                        def_mod=-100, level_mod=1, materials=[mat])
+        tok = _CardInst(-1, "Token", token=True)
+        back = _CardInst.from_tuple(xyz.to_tuple())
+        self.assertEqual((back.owner, back.counters, back.atk_mod,
+                          back.def_mod, back.level_mod), ("opp", 2, 500, -100, 1))
+        self.assertEqual([(m.uid, m.card_id, m.counters) for m in back.materials],
+                         [(mat.uid, 10, 1)])
+        self.assertIsNot(back.materials[0], mat)
+        self.assertTrue(_CardInst.from_tuple(tok.to_tuple()).token)
+
+    def test_reset_state_clears_field_only_state(self):
+        c = _CardInst(1, "X", face_down=True, defense=True, counters=3,
+                      atk_mod=100, def_mod=100, level_mod=-1, owner="opp")
+        c.reset_state()
+        self.assertEqual((c.face_down, c.defense, c.counters, c.atk_mod,
+                          c.def_mod, c.level_mod), (False, False, 0, 0, 0, 0))
+        self.assertEqual(c.owner, "opp")          # Besitz bleibt
 
     def test_from_tuple_none(self):
         self.assertIsNone(_CardInst.from_tuple(None))

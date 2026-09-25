@@ -29,6 +29,7 @@ from .combos import ComboView
 from .deck import DeckView
 from .labels import ATTR_DE, TYPE_DE
 from .manual import HelpView
+from ._rules import MODES as R_MODES
 from .playtest import PlayTestView
 from .repository import CardRepository
 from .tasks import DbTask, DbTaskSignals
@@ -313,6 +314,7 @@ class MainWindow(QMainWindow):
         s.setValue("coll/attr", cv.filter_attr.currentData() or "")
         s.setValue("coll/arch", cv.filter_arch.currentData() or "")
         s.setValue("coll/untranslated", cv.filter_untranslated.isChecked())
+        s.setValue("play/rules", self.playtest_view.rule_mode)
 
     def _restore_session_state(self) -> None:
         """Gesicherten Zustand wiederherstellen (nach dem Aufbau der Views)."""
@@ -349,6 +351,10 @@ class MainWindow(QMainWindow):
         did = s.value("ui/deck_id", -1, type=int)
         if did is not None and did >= 0:
             self.deck_view.select_deck(did)
+        # Regel-Modus des Spielfelds (aus/warnen/erzwingen).
+        mode = s.value("play/rules", "warn") or "warn"
+        if mode in {key for key, _ in R_MODES}:
+            self.playtest_view.set_rule_mode(mode)
         # Zuletzt aktives Tab.
         tab = s.value("ui/tab", 0, type=int)
         if tab is not None and 0 <= tab < self.tabs.count():

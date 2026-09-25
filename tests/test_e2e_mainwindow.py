@@ -364,10 +364,11 @@ class PlaytestRecorderFlowTests(E2ETestCase):
         self.use_deck(w)
         w.tabs.setCurrentWidget(w.playtest_view)
         pv = w.playtest_view
+        pv.set_rule_mode("off")          # Heuristik-Recorder ohne Regel-Menues
         deck = pv._deck_id
-        self.assertEqual(len(pv._hand), 5)
+        self.assertEqual(len(pv.game.me.hand), 5)
         self.click(pv, "● Aufzeichnen")
-        first = pv._hand[0]
+        first = pv.game.me.hand[0]
         pv._on_card_clicked(first)                      # aufnehmen ...
         pv._on_zone_clicked("m0")                       # ... und beschwoeren
         self.assertEqual(pv._rec_log, [f"NS {first.name}"])
@@ -404,11 +405,11 @@ class PlaytestRecorderFlowTests(E2ETestCase):
         deck = self.own_deck("Sky Striker")
         self.assertEqual(pv._deck_id, deck)
         counts = ydb.deck_counts(self.db, deck)
-        self.assertEqual(len(pv._hand) + len(pv._deck), counts["main"])
-        self.assertEqual(len(pv._extra), counts["extra"])
+        self.assertEqual(len(pv.game.me.hand) + len(pv.game.me.deck), counts["main"])
+        self.assertEqual(len(pv.game.me.extra), counts["extra"])
         pv.hand_size_cb.setCurrentIndex(1)
         self.click(pv, "Neue Starthand")
-        self.assertEqual(len(pv._hand), 6)
+        self.assertEqual(len(pv.game.me.hand), 6)
 
 
 class TranslationFlowTests(E2ETestCase):
@@ -582,6 +583,7 @@ class SessionStateTests(E2ETestCase):
         cv.filter_untranslated.setChecked(True)
         w.deck_view.select_deck(self.own_deck("Sky Striker"))
         w.tabs.setCurrentWidget(w.deck_view)
+        w.playtest_view.set_rule_mode("enforce")
         w._save_session_state()
         self.assertEqual(QSettings().format(), QSettings.Format.IniFormat)
         self.assertTrue(any(f.endswith(".ini") for _, _, files in os.walk(self.settings_dir)
@@ -592,6 +594,8 @@ class SessionStateTests(E2ETestCase):
         w2._restore_session_state()
         self.assertEqual(w2.tabs.currentWidget(), w2.deck_view)
         self.assertEqual(w2.deck_view.deck_cb.currentText(), "Sky Striker")
+        self.assertEqual(w2.playtest_view.rule_mode, "enforce")
+        self.assertEqual(w2.playtest_view.rules_cb.currentData(), "enforce")
         cv2 = w2.collection_view
         self.assertEqual(cv2.filter_text.text(), "Drache")
         self.assertEqual(cv2.filter_cat.currentData(), "monster")
@@ -608,6 +612,7 @@ class SessionStateTests(E2ETestCase):
         self.assertEqual(w.tabs.currentIndex(), 0)
         self.assertEqual(w.deck_view.deck_cb.currentText(), ydb.list_decks(self.db)[0]["name"])
         self.assertEqual(w.collection_view.filter_text.text(), "")
+        self.assertEqual(w.playtest_view.rule_mode, "warn")
 
 
 if __name__ == "__main__":

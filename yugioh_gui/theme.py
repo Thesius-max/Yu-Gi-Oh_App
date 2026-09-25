@@ -168,6 +168,16 @@ QToolTip {
 #BoardZone {
     background: #1f1830; border: 1px solid #3a2f4d; border-radius: 4px;
 }
+#OppBoardZone {
+    background: #231626; border: 1px solid #3a2f4d; border-radius: 4px;
+}
+#BoardZone[hint="true"] { border: 2px solid #d4af37; }
+#TurnLabel { font-weight: bold; color: #d4af37; padding: 0 6px; }
+#PhaseButton { padding: 3px 8px; }
+#PhaseButton:checked { background: #d4af37; color: #1a1426; font-weight: bold; }
+#LifePoints { font-size: 13pt; font-weight: bold; color: #d4af37; }
+#RuleWarn { color: #e6a23c; }
+#RuleOk { color: #9b90b5; }
 
 /* Benannte Widgets statt Inline-Styles in den Views */
 #HintLabel { color: #9b90b5; }
