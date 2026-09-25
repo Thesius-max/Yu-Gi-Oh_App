@@ -58,8 +58,21 @@ Der Suche-Tab hat drei Spalten (frei per Trennbalken verschiebbar):
 ## Suchen & filtern
 
 - **Textfeld oben:** durchsucht **Name und Kartentext** (Volltext).
-- **Filter:** Typ, Attribut, Archetyp, Level/Rank, ATK von–bis.
-  Jede Änderung löst sofort eine neue Suche aus.
+- **Filter:** Typ, **Merkmal** (Empfänger, Flipp, Pendel, Ritual, Zwilling,
+  Spirit, Union, Toon, ohne Effekt, Extra Deck), Attribut, **Typ-Linie/Art**
+  (Drache, Unterweltler … bzw. bei Zaubern/Fallen Schnell, Permanent, Feld …),
+  Archetyp, Level/Rank, **Link-Wert**, ATK und
+  **DEF** von–bis. Jede Änderung löst sofort eine neue Suche aus.
+- **Wortlaut:** filtert nach dem, was der Kartentext *tut* — z. B.
+  **Handtraps (heuristisch)** — genauer: Handeffekte im Gegnerzug (Monster, die einen Effekt aus der Hand als
+  Schnelleffekt oder im Zug des Gegners einsetzen, und Fallen, die aus der
+  Hand aktiviert werden dürfen — enthält alle klassischen Handtraps, aber
+  auch Karten, die nicht stören), Schnelleffekte, Auslöse-/Zünd-/Dauereffekte, „wählt Ziele“,
+  „annulliert“, hartes/weiches OPT, ohne OPT-Beschränkung, nicht
+  normalbeschwörbar, mit Lock. Grundlage ist dieselbe Heuristik wie bei
+  **Wortlaut ?** (englischer Kartentext); beim ersten Mal rechnet die App die
+  Merkmale einmalig vor (etwa eine Sekunde), nach einem Kartendaten-Update
+  erneut.
 - **„Nur meine Sammlung":** beschränkt die Treffer auf Karten, die du besitzt.
 - Die Trefferzahl steht unten links.
 
