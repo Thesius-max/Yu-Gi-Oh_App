@@ -43,6 +43,7 @@ Nur `<AKTION> <Karte>` ist Pflicht, alles andere nach Bedarf.
 |---|---|
 | `NS` | Normal Summon |
 | `SS` | Special Summon (Ziel ohne Angabe: das Feld) |
+| `Flip` | Flippbeschwörung (gesetztes Monster offen in Angriff) |
 | `Act` | Zauber/Falle aktivieren bzw. spielen |
 | `Eff` / `Eff1` / `Eff2` | Effekt (bzw. ersten/zweiten Effekt) aktivieren |
 | `Add` | auf die Hand nehmen (Suche; ersetzt „Search") |
@@ -73,6 +74,7 @@ Tuner zuerst, Level/Rang/Link-Wert in Klammern:
 Synchro: <Tuner> (<Lvl>) + <Non-Tuner> (<Lvl>) -> <Ziel> (<Lvl>)
 Xyz: <Material> (<Lvl>) + <Material> (<Lvl>) -> <Ziel> (R<Rang>)
 Link: <Material> + <Material> -> <Ziel> (L<Wert>)
+Link: <Material> -> <Ziel> (L1)          (Link-1: ein Material)
 Fusion: <Material> + <Material> -> <Ziel>
 ```
 

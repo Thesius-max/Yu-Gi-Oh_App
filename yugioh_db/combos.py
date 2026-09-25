@@ -29,7 +29,7 @@ COMBO_ROLES = ("starter", "extender", "payoff", "handtrap")
 #   <AKTION> <Karte> (<Quelle>) [Req: <Bedingung>] -> <Folge> | Lock: <Lock>
 # Erlaubte Aktions-Keywords am Zeilenanfang:
 COMBO_STEP_KEYWORDS = (
-    "NS", "SS", "Act", "Eff", "Eff1", "Eff2", "Add", "Send", "Banish",
+    "NS", "SS", "Flip", "Act", "Eff", "Eff1", "Eff2", "Add", "Send", "Banish",
     "Mill", "Draw", "Discard", "Set",
     "Synchro:", "Xyz:", "Link:", "Fusion:",
 )
@@ -51,7 +51,7 @@ def lint_combo_steps(steps: Iterable[str]) -> list[str]:
         if first not in allowed:
             problems.append(
                 "beginnt nicht mit einem Notation-Keyword "
-                "(NS, SS, Act, Eff/Eff1/Eff2, Add, Send, Banish, Mill, "
+                "(NS, SS, Flip, Act, Eff/Eff1/Eff2, Add, Send, Banish, Mill, "
                 "Draw, Discard, Set, Synchro:/Xyz:/Link:/Fusion:)"
             )
         head, *locks = (seg.strip() for seg in text.split("|"))
@@ -74,7 +74,8 @@ def lint_combo_steps(steps: Iterable[str]) -> list[str]:
                 problems.append(
                     f"Formel braucht einen Doppelpunkt: '{kind}: A + B -> Ziel'"
                 )
-            elif "+" not in head or "->" not in head:
+            # Link-1-Monster haben nur ein Material ('Link: A -> Ziel (L1)').
+            elif "->" not in head or ("+" not in head and first != "link"):
                 problems.append(
                     "Formel unvollstaendig -- erwartet: "
                     f"{kind}: Material + Material -> Ziel"

@@ -111,9 +111,10 @@ class PureFunctionTests(unittest.TestCase):
 
     def test_lint_formula_keywords(self):
         ok = ["Xyz: A (4) + B (4) -> C (R4)", "Link: A + B -> C (L2)",
-              "Fusion: A + B -> C"]
+              "Fusion: A + B -> C", "Link: A -> C (L1)", "Flip X"]
         self.assertEqual(ydb.lint_combo_steps(ok), [])
         self.assertTrue(ydb.lint_combo_steps(["Synchro Soul + Bone"]))
+        self.assertTrue(ydb.lint_combo_steps(["Xyz: A -> C (R4)"]))   # nur Link-1
         self.assertTrue(ydb.lint_combo_steps(["NS X -> Xyz: A + B -> C"]))
 
 

@@ -36,6 +36,7 @@ Xyz: A (4) + B (4) -> Ziel (R4)      Link: A + B -> Ziel (L2)
 | Kürzel | Bedeutung |
 |---|---|
 | NS / SS | Normal / Special Summon |
+| Flip | Flippbeschwörung (verdecktes Monster aufdecken) |
 | Act | Zauber/Falle aktivieren |
 | Eff, Eff1, Eff2 | (ersten/zweiten) Effekt aktivieren |
 | Add | auf die Hand nehmen (Suche) |
