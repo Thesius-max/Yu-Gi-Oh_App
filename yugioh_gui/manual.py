@@ -6,12 +6,7 @@ der gepackte Build sie sicher findet); HelpView rendert sie.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QListWidget, QListWidgetItem, QSplitter, QTextBrowser, QVBoxLayout,
-    QWidget
-)
-
+from .docview import DocView
 from .notation import NOTATION_MD
 
 
@@ -41,6 +36,7 @@ lokal gehalten — **danach arbeitet die App offline**.
 | **Deck** | Decks bauen, prüfen, importieren/exportieren, Kombo-Hilfe |
 | **Spielfeld** | Decks testen — mit Regelwerk, Dummy-Gegner und Kombo-Recorder |
 | **Kombos** | Kombo-Linien dokumentieren (Bausteine, Rollen, Schritte) |
+| **Regelwerk** | wie man Yu-Gi-Oh spielt: Phasen, Kartenarten, Beschwörungen, Effekte, Ketten, Kartentext lesen |
 | **Handbuch** | diese Hilfe |
 
 ## Beim allerersten Start
@@ -83,6 +79,19 @@ ersten Aufruf einmal lokal zwischengespeichert.
   passende Zone bzw. ins Side Deck hinzu.
 - **Kombo → + als Baustein zur aktiven Kombo** — übernimmt die Karte als
   Baustein der gerade im Kombos-Tab geöffneten Kombo.
+- **Wortlaut ?** — zerlegt den Kartentext nach dem genormten Wortlaut:
+  Bedingung, Kosten, Ziel, Auflösung und Einschränkungen farbig markiert,
+  dazu die Effektart (Zünd-, Auslöse-, Schnell-, Dauereffekt …), die Art des
+  „Einmal pro Spielzug“ und was „dann“, „und falls du dies tust“ oder
+  „außerdem“ bedeuten. Jede Erklärung verlinkt das passende Kapitel im
+  Regelwerk. Das ist eine **Lesehilfe** — keine Regelentscheidung.
+- **Rulings (n)** — deine **eigenen Rulings** zur Karte (Text + Quelle,
+  hinzufügen/bearbeiten/löschen) und Knöpfe zur **Konami-Datenbank**
+  (offiziell, mit FAQ) und zu **Yugipedia**. Die App lädt selbst nichts aus
+  dem Netz; deine Rulings überleben Kartendaten-Updates, stehen im
+  KI-Deck-Export und zeigen sich auf dem Spielfeld als 📌 im Tooltip.
+- **Wortlaut ?** und **Rulings** gibt es auch im Detail-Pop-up (Doppelklick
+  in Sammlung und Deck, „Details…“ auf dem Spielfeld).
 """),
 
     ("Sammlung-Tab", """\
@@ -213,7 +222,8 @@ Zug 1, mit **6 (Second)** bist du Zweiter (Zug 2).
 
 Rechts stehen die **Lebenspunkte** beider Spieler (**± LP** für Effekt-
 Schaden oder -Gewinne) und das **Protokoll** mit Zugwechseln, Kämpfen und
-Regel-Hinweisen.
+Regel-Hinweisen. Ein **Doppelklick** auf eine Protokollzeile öffnet das
+passende Kapitel im **Regelwerk**-Tab.
 
 ## Regelwerk: aus · warnen · erzwingen
 
@@ -414,6 +424,25 @@ Die genaue Syntax findest du im Abschnitt **Kombo-Notation**.
 
     ("Kombo-Notation", NOTATION_MD),
 
+    ("Regelwerk-Tab", """\
+# Regelwerk
+
+Der Tab **Regelwerk** erklärt, **wie man Yu-Gi-Oh spielt** — auf Deutsch mit
+den englischen Fachbegriffen: Spielziel & Deckbau, Spielfeld & Zonen, Zug &
+Phasen, Kartenarten, Beschwörungsarten, Positionen & Kampf, Effektarten,
+Ketten & Zauberschnelligkeit, **Kartentext lesen**, ein Glossar Deutsch ↔
+Englisch und allgemeine Rulings.
+
+- **Suchfeld** über der Kapitelliste: filtert die Kapitel (Groß-/
+  Kleinschreibung egal) und markiert die erste Fundstelle.
+- **Sprünge hierher:** Links in der **Wortlaut**-Lesehilfe und ein
+  **Doppelklick auf eine Zeile im Spielfeld-Protokoll** (z. B. eine
+  ⚠-Warnung) öffnen das passende Kapitel.
+
+Stand ist die Master Rule (April 2020); bei Widersprüchen gilt das
+offizielle Regelheft.
+"""),
+
     ("Daten & Updates", """\
 # Daten & Updates
 
@@ -461,31 +490,11 @@ Hintergrund, warum die App sich so verhält:
 ]
 
 
-class HelpView(QWidget):
-    """Benutzerhandbuch als eigener Tab: links die Abschnittsliste, rechts der
-    gewaehlte Abschnitt als gerenderter Text. Rein statisch (kein Repo-Zugriff),
-    daher kein refresh()."""
+class HelpView(DocView):
+    """Benutzerhandbuch als eigener Tab: Abschnittsliste mit Suche, rechts
+    der gewaehlte Abschnitt (geteilte DocView). Rein statisch (kein
+    Repo-Zugriff), daher kein refresh()."""
 
     def __init__(self) -> None:
-        super().__init__()
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        self.index = QListWidget()
-        for title, _md in _MANUAL_SECTIONS:
-            self.index.addItem(QListWidgetItem(title))
-        self.index.currentRowChanged.connect(self._show_section)
-        splitter.addWidget(self.index)
-
-        self.content = QTextBrowser()
-        self.content.setOpenExternalLinks(True)
-        splitter.addWidget(self.content)
-        splitter.setSizes([240, 760])
-
-        outer = QVBoxLayout(self)
-        outer.addWidget(splitter)
-        self.index.setCurrentRow(0)
-
-    def _show_section(self, row: int) -> None:
-        if 0 <= row < len(_MANUAL_SECTIONS):
-            self.content.setMarkdown(_MANUAL_SECTIONS[row][1])
-            self.content.verticalScrollBar().setValue(0)
+        super().__init__([(title, title, md) for title, md in _MANUAL_SECTIONS],
+                         placeholder="Handbuch durchsuchen …")
