@@ -408,7 +408,8 @@ def combo_coverage(db_path: str, combo_id: int, deck_id: int) -> dict:
 
 def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
     """Alle Kombos mit ihrer Abdeckung gegen das Deck, nach Abdeckung sortiert.
-    Eine Verbindung fuer alle Kombos (kein N+1)."""
+    'covered' = voll abgedeckte Bausteine, 'present' = Bausteine mit
+    mindestens einer Kopie im Deck. Eine Verbindung fuer alle Kombos (kein N+1)."""
     with _conn(db_path) as conn:
         combos = conn.execute(
             "SELECT combo_id, name, archetype FROM combos "
@@ -422,6 +423,7 @@ def combos_for_deck(db_path: str, deck_id: int) -> list[dict]:
                 "combo_id": cb["combo_id"], "name": cb["name"],
                 "archetype": cb["archetype"], "total": total,
                 "covered": cov["covered"],
+                "present": sum(1 for p in cov["pieces"] if p["have"] > 0),
                 "coverage": (cov["covered"] / total) if total else 0.0,
             })
     out.sort(key=lambda x: (-x["coverage"], x["name"]))

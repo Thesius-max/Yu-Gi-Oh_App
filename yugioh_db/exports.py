@@ -82,7 +82,7 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
     count = 0
     for cb in combos_for_deck(db_path, deck_id):
         combo = get_combo(db_path, cb["combo_id"])
-        if cb["covered"] == 0 and combo["deck_id"] != deck_id:
+        if cb["present"] == 0 and combo["deck_id"] != deck_id:
             continue  # gehoert erkennbar nicht zu diesem Deck
         count += 1
         head = f"{count}) {combo['name']}"

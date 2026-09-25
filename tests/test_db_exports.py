@@ -213,13 +213,10 @@ class ComboLinesExportTests(CardIdsTestCase):
         text = ydb.export_deck_combos_text(self.db, deck)
         self.assertIn(f"3x {self.display_name(a)}  (nur 1/3 im Deck)", text)
 
-    @unittest.expectedFailure
     def test_combo_with_partially_present_piece_is_listed(self):
-        """BEFUND (2026-09-24): Docstring und CLAUDE.md sagen 'Kombos mit >=1
-        Baustein im Deck'. Der Code prueft aber cb['covered'] == 0, und
-        'covered' zaehlt nur VOLL abgedeckte Bausteine. Eine Kombo, deren
-        einziger Baustein mit 1 von 3 Kopien im Deck liegt, faellt daher aus
-        dem Export. Offen: Doku anpassen oder Filter auf 'have > 0' umstellen."""
+        """Regression (Befund 2026-09-24): 'Kombos mit >=1 Baustein im Deck'
+        schliesst Bausteine ein, die nur teilweise (1 von 3 Kopien) im Deck
+        liegen -- vorher filterte der Export auf voll abgedeckte Bausteine."""
         a = self.main_ids(1)[0]
         deck = ydb.create_deck(self.db, "T")
         ydb.add_card_to_deck(self.db, deck, a)

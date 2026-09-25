@@ -49,7 +49,12 @@ class LegacyComboTests(CardIdsTestCase):
         )
         self.assertEqual(row["total"], 2)
         self.assertEqual(row["covered"], 1)
+        self.assertEqual(row["present"], 1)
         self.assertAlmostEqual(row["coverage"], 0.5)
+        # Teilweise vorhanden (1 von 2 Kopien): zaehlt fuer 'present', nicht 'covered'.
+        ydb.add_combo_card(self.db, combo, self.main_id, 1)          # jetzt 2 benoetigt
+        row = next(r for r in ydb.combos_for_deck(self.db, deck) if r["combo_id"] == combo)
+        self.assertEqual((row["covered"], row["present"]), (0, 1))
 
     def test_combo_coverage_collection(self):
         combo = ydb.create_combo(self.db, "K")
