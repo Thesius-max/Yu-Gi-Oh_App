@@ -71,6 +71,35 @@ class RepositoryTests(QtTestCase):
         arch = self.repo.distinct("archetype")[0]
         self.assertTrue(all(r["archetype"] == arch for r in self.repo.query(archetype=arch)))
 
+    def test_new_filters_race_trait_link_def(self):
+        self.assertIn("Dragon", self.repo.distinct("race"))
+        rows = self.repo.query(race="Dragon", def_min=2000, def_max=2500, limit=100)
+        self.assertTrue(rows)
+        self.assertTrue(all(r["race"] == "Dragon" and 2000 <= r["def"] <= 2500
+                            for r in rows))
+        links = self.repo.query(link_value=2, limit=100)
+        self.assertTrue(links and all(r["link_value"] == 2 for r in links))
+        from yugioh_gui.repository import TRAITS
+        for key, _label, _sql in TRAITS:
+            rows = self.repo.query(trait=key, limit=50)
+            self.assertTrue(rows, key)
+        tuners = self.repo.query(trait="tuner", limit=5000)
+        self.assertIn(14558127, {r["id"] for r in tuners})         # Ash Blossom
+        self.assertTrue(all("Tuner" in r["type"] for r in tuners))
+
+    def test_wording_filter_needs_precomputed_flags(self):
+        self.assertEqual(self.repo.query(wording="handtrap"), [])  # noch nicht berechnet
+        self.assertGreater(ydb.ensure_wording_flags(self.db), 10_000)
+        self.assertEqual(ydb.ensure_wording_flags(self.db), 0)     # aktuell
+        handtraps = {r["id"] for r in self.repo.query(wording="handtrap", limit=5000)}
+        self.assertTrue({14558127, 10045474} <= handtraps)         # Ash, Imperm
+        self.assertNotIn(25784595, handtraps)                      # Bone Archfiend
+        quick = {r["id"] for r in self.repo.query(wording="quick", limit=5000)}
+        self.assertIn(14558127, quick)
+        # 'quick' darf nicht in 'quick_x' o. ae. hineintreffen: exakte Merkmale.
+        self.assertTrue(all(",quick," in r["wording_flags"]
+                            for r in self.repo.query(wording="quick", limit=50)))
+
     def test_only_collection(self):
         owned = {r[0] for r in self.query("SELECT card_id FROM collection")}
         rows = self.repo.query(only_collection=True, limit=5000)

@@ -179,6 +179,14 @@ class FullUpdateTests(DevDbTestCase):
         self.assertEqual(self.scalar(sql, (link,)), self.REAL_LINK_MARKERS[link])
         self.assertIsNone(self.scalar(sql, (self.main_ids(1)[0],)))
 
+    def test_update_invalidates_wording_flags(self):
+        self.assertGreater(ydb.ensure_wording_flags(self.db), 0)
+        self.assertEqual(ydb.ensure_wording_flags(self.db), 0)
+        cards, de = api_payload_from_db(self.db)
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        self.assertGreater(ydb.ensure_wording_flags(self.db), 0)   # neu berechnet
+
     def test_update_into_fresh_database(self):
         cards, _de = api_payload_from_db(self.db)
         cards = cards[:50]

@@ -83,6 +83,12 @@ class LegacyDeckTests(CardIdsTestCase):
         self.assertEqual(info["name"], play["names"][self.extra_id])
         self.assertEqual(ydb.deck_zone_for(info["frame_type"], info["type"]), "extra")
 
+    def test_link_markers_missing_counts_link_monsters_without_arrows(self):
+        before = ydb.link_markers_missing(self.db)
+        self.assertEqual(before, self.count("cards", "frame_type = 'link'"))
+        self.set_real_link_markers()
+        self.assertEqual(ydb.link_markers_missing(self.db), before - len(self.REAL_LINK_MARKERS))
+
     def test_play_info_link_markers(self):
         markers = self.set_real_link_markers()
         ids = list(markers) + [self.main_id, 999_999_999_999]

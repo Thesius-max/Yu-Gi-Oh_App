@@ -371,6 +371,82 @@ def _analyze(s: str, card_type: str, subtype: str | None) -> Segment:
     return seg
 
 
+# Suchfilter aus der Lesehilfe: (Schluessel, Beschriftung). Die Merkmale
+# werden je Karte vorberechnet (cards.wording_flags); WORDING_VERSION hoch-
+# zaehlen, wenn sich die Heuristik aendert -- dann wird neu berechnet.
+WORDING_VERSION = 1
+WORDING_FILTERS = (
+    ("handtrap", "Handtraps (heuristisch)"),
+    ("quick", "Schnelleffekte"),
+    ("trigger", "Auslöseeffekte"),
+    ("ignition", "Zündeffekte"),
+    ("continuous", "Dauereffekte"),
+    ("flip", "Flippeffekte"),
+    ("targets", "wählt Ziele"),
+    ("negate", "annulliert"),
+    ("hard_opt", "hartes OPT"),
+    ("soft_opt", "weiches OPT"),
+    ("no_opt", "ohne OPT-Beschränkung"),
+    ("nomi", "nicht normalbeschwörbar"),
+    ("inherent", "eingebaute Beschwörung"),
+    ("lock", "mit Lock"),
+)
+_HAND_COST = re.compile(
+    r"discard this card|send this card from your hand|banish this card from your hand"
+    r"|reveal this card in your hand|special summon this card from your hand"
+    r"|this card is in your hand",
+    re.I,
+)
+_OPPONENTS_TURN = re.compile(r"(?:either player's|your opponent's) turn|quick effect", re.I)
+
+
+def card_flags(description: str | None, card_type: str | None = "",
+               subtype: str | None = None) -> set[str]:
+    """Wortlaut-Merkmale einer Karte (Schluessel aus WORDING_FILTERS) --
+    dieselbe Heuristik wie explain_card_text. 'handtrap': Monster mit einem
+    Schnelleffekt (oder Effekt im Zug des Gegners), den es aus der Hand
+    einsetzt, bzw. eine Falle, die aus der Hand aktiviert werden darf."""
+    flags: set[str] = set()
+    segs = explain_card_text(description, card_type, subtype)
+    t = card_type or ""
+    is_monster = "Monster" in t
+    activated = False
+    for seg in segs:
+        labels = {tag.label for tag in seg.tags}
+        if seg.kind in ("quick", "trigger", "ignition", "continuous", "flip", "inherent"):
+            flags.add(seg.kind)
+        if seg.kind in ("quick", "trigger", "ignition", "flip", "activation"):
+            activated = True
+        if seg.kind == "summon_condition":
+            flags.add("nomi")
+        if "Ziel bei Aktivierung" in labels:
+            flags.add("targets")
+        if labels & {"Effekt annullieren", "Aktivierung annullieren"}:
+            flags.add("negate")
+        if labels & {"Hartes OPT", "Hartes OPT (je Effekt)", "Geteiltes OPT",
+                     "Aktivierungs-Limit", "Einmal pro Duell"}:
+            flags.add("hard_opt")
+        if "Weiches OPT" in labels:
+            flags.add("soft_opt")
+        if labels & {"Einschränkung (Lock)", "Einschränkung bei Aktivierung"}:
+            flags.add("lock")
+        head = "".join(p.text for p in seg.parts if p.role in ("condition", "cost"))
+        if is_monster and seg.kind in ("quick", "trigger", "ignition") and \
+                _HAND_COST.search(seg.text) and \
+                (seg.kind == "quick" or _OPPONENTS_TURN.search(head)):
+            flags.add("handtrap")
+        if seg.kind == "rule" and "from your hand" in seg.text.lower():
+            flags.add("handtrap")
+    if activated and not flags & {"hard_opt", "soft_opt"}:
+        flags.add("no_opt")
+    return flags
+
+
+def flags_to_text(flags: set[str]) -> str:
+    """Speicherform ',a,b,' -- LIKE '%,a,%' findet ein Merkmal exakt."""
+    return "," + ",".join(sorted(flags)) + "," if flags else ","
+
+
 def explain_card_text(description: str | None, card_type: str | None = "",
                       subtype: str | None = None) -> list[Segment]:
     """Kartentext (englisch) in Segmente zerlegen und erklaeren.

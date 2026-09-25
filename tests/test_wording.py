@@ -129,6 +129,22 @@ class WordingTests(unittest.TestCase):
                                   "description LIKE '%[ Monster Effect ]%'")
         self.assertEqual({s.scope for s in pend} - {""}, {"Pendeleffekt", "Monstereffekt"})
 
+    def test_card_flags(self):
+        def flags(cid):
+            c = self.card(cid)
+            return W.card_flags(c["description"], c["type"], c["race"])
+        ash = flags(ASH)
+        self.assertTrue({"handtrap", "quick", "hard_opt", "negate"} <= ash)
+        self.assertNotIn("no_opt", ash)
+        self.assertIn("handtrap", flags(IMPERM))                  # Falle aus der Hand
+        self.assertTrue({"ignition", "lock", "targets"} <= flags(BONE))
+        self.assertNotIn("handtrap", flags(BONE))
+        self.assertIn("continuous", flags(MASQ))
+        self.assertEqual(W.flags_to_text({"b", "a"}), ",a,b,")
+        self.assertEqual(W.flags_to_text(set()), ",")
+        self.assertLessEqual(set().union(*(flags(c) for c in (ASH, IMPERM, BONE, MASQ))),
+                             {k for k, _l in W.WORDING_FILTERS})
+
     def test_every_card_is_analyzed_without_errors(self):
         rows = query(self.db, "SELECT type, race, description FROM cards")
         kinds = set()

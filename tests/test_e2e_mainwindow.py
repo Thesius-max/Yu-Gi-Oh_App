@@ -610,6 +610,24 @@ class RulebookFlowTests(E2ETestCase):
         self.assertEqual(w.playtest_view._ruling_counts.get(self.BONE), 1)
 
 
+class SearchFilterFlowTests(E2ETestCase):
+    def test_find_handtraps_by_wording_and_filter_tuners(self):
+        w = self.window()
+        w._search_timer.stop()
+        w.wording_cb.setCurrentIndex(w.wording_cb.findData("handtrap"))
+        w.trait_cb.setCurrentIndex(w.trait_cb.findData("tuner"))
+        w.search()                                  # berechnet Merkmale einmalig
+        ids = [w.results.item(i).data(UR) for i in range(w.results.count())]
+        self.assertIn(14558127, ids)                # Ash Blossom: Empfaenger + Handtrap
+        self.assertNotIn(10045474, ids)             # Imperm: Handtrap, aber kein Tuner
+        self.assertEqual(w.count_label.text(), f"{len(ids)} Treffer")
+        w.race_cb.setCurrentIndex(w.race_cb.findData("Zombie"))
+        self.assertEqual(w.race_cb.currentData(), "Zombie")      # Anzeige deutsch
+        w.search()
+        self.assertIn(14558127, [w.results.item(i).data(UR)
+                                 for i in range(w.results.count())])
+
+
 class SessionStateTests(E2ETestCase):
     """Sitzungs-/Fensterstatus mit auf einen Temp-Ordner umgeleiteten
     INI-Settings -- die echten Einstellungen (Registry) bleiben unberuehrt."""
@@ -662,6 +680,21 @@ class SessionStateTests(E2ETestCase):
         expected = ydb.list_collection(self.db, text="Drache", category="monster",
                                        untranslated_only=True)
         self.assertEqual(len(shown), len(expected))
+
+    def test_missing_link_markers_hint(self):
+        w = self.window()
+        self.assertGreater(ydb.link_markers_missing(self.db), 0)   # Dev-DB: alt
+        with mock.patch.object(w, "_start_update") as start:
+            self.ui.question = QMessageBox.StandardButton.Yes
+            w._hint_missing_link_markers()
+            start.assert_called_once_with(confirmed=True)
+            self.ui.question = QMessageBox.StandardButton.No
+            w._hint_missing_link_markers()                   # abgelehnt -> gemerkt
+            asked = len(self.ui.titles("question"))
+            w._hint_missing_link_markers()                   # fragt nicht mehr
+            self.assertEqual(len(self.ui.titles("question")), asked)
+            self.assertEqual(start.call_count, 1)
+        self.assertEqual(self.ui.titles("question"), ["Link-Pfeile fehlen"] * 2)
 
     def test_tab_is_restored_by_title_and_legacy_index(self):
         w = self.window()

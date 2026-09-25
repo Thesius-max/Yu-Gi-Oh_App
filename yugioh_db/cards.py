@@ -11,6 +11,7 @@ import sqlite3
 from typing import Optional
 
 from .schema import _conn
+from .wording import WORDING_VERSION, card_flags, flags_to_text
 
 
 def get_card_translation(db_path: str, card_id: int) -> Optional[sqlite3.Row]:
@@ -157,3 +158,41 @@ def card_play_info(db_path: str, card_ids) -> dict[int, dict]:
             ids,
         ).fetchall()
     return {r["id"]: play_info_from_row(r) for r in rows}
+
+
+def link_markers_missing(db_path: str) -> int:
+    """Anzahl der Link-Monster ohne Link-Pfeile -- > 0 heisst: die
+    Kartendaten sind aelter als die Spalte link_markers und sollten
+    aktualisiert werden (Spielfeld-Zonenregeln brauchen die Pfeile)."""
+    with _conn(db_path) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cards WHERE frame_type = 'link' "
+            "AND link_markers IS NULL"
+        ).fetchone()[0]
+
+
+def ensure_wording_flags(db_path: str) -> int:
+    """Wortlaut-Merkmale (cards.wording_flags) fuer die Suche bereitstellen.
+    Rechnet nur, wenn meta.wording_version nicht zur Heuristik passt (erster
+    Bedarf, neue Heuristik oder nach einem Daten-Update) -- einmalig ~1 s.
+    Rueckgabe: Anzahl neu berechneter Karten (0 = war aktuell)."""
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'wording_version'"
+        ).fetchone()
+        if row is not None and row["value"] == str(WORDING_VERSION):
+            return 0
+        rows = conn.execute(
+            "SELECT id, type, race, description FROM cards"
+        ).fetchall()
+        conn.executemany(
+            "UPDATE cards SET wording_flags = ? WHERE id = ?",
+            [(flags_to_text(card_flags(r["description"], r["type"], r["race"])), r["id"])
+             for r in rows],
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('wording_version', ?)",
+            (str(WORDING_VERSION),),
+        )
+        conn.commit()
+        return len(rows)

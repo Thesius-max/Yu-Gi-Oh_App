@@ -15,9 +15,26 @@ import yugioh_db as ydb
 # Datenzugriff -- kapselt alle SQL-Abfragen, die die UI braucht
 # ---------------------------------------------------------------------------
 
+# Monster-Merkmale fuer den Suchfilter: (Schluessel, Beschriftung, SQL).
+TRAITS = (
+    ("tuner", "Empfänger (Tuner)", "c.type LIKE '%Tuner%'"),
+    ("flip", "Flipp", "c.type LIKE '%Flip%'"),
+    ("pendulum", "Pendel", "c.frame_type LIKE '%pendulum%'"),
+    ("ritual", "Ritual", "c.frame_type LIKE 'ritual%'"),
+    ("gemini", "Zwilling (Gemini)", "c.type LIKE '%Gemini%'"),
+    ("spirit", "Spirit", "c.type LIKE '%Spirit%'"),
+    ("union", "Union", "c.type LIKE '%Union%'"),
+    ("toon", "Toon", "c.type LIKE '%Toon%'"),
+    ("normal", "ohne Effekt (Normal)", "c.frame_type IN ('normal', 'normal_pendulum')"),
+    ("extra", "Extra Deck", "c.frame_type IN ('fusion','synchro','xyz','link',"
+     "'fusion_pendulum','synchro_pendulum','xyz_pendulum')"),
+)
+TRAIT_SQL = {key: sql for key, _label, sql in TRAITS}
+
+
 class CardRepository:
     # Whitelist, damit Spaltennamen nie aus Benutzereingaben kommen.
-    _FILTER_COLUMNS = ("type", "attribute", "archetype")
+    _FILTER_COLUMNS = ("type", "attribute", "archetype", "race")
 
     def __init__(self, db_path: str = ydb.DEFAULT_DB):
         self.db_path = db_path
@@ -49,9 +66,18 @@ class CardRepository:
         level: int | None = None,
         atk_min: int = 0,
         atk_max: int = 0,
+        race: str | None = None,
+        trait: str | None = None,
+        link_value: int | None = None,
+        def_min: int = 0,
+        def_max: int = 0,
+        wording: str | None = None,
         only_collection: bool = False,
         limit: int = 300,
     ) -> list:
+        """Kartensuche: Volltext (FTS) plus Filter. 'trait' = Monster-
+        Merkmal (Schluessel aus TRAIT_SQL), 'wording' = Wortlaut-Merkmal
+        (yugioh_db.WORDING_FILTERS; setzt ensure_wording_flags voraus)."""
         clauses: list[str] = []
         params: list = []
 
@@ -80,6 +106,18 @@ class CardRepository:
             clauses.append("c.atk >= ?"); params.append(atk_min)
         if atk_max > 0:
             clauses.append("c.atk <= ?"); params.append(atk_max)
+        if race:
+            clauses.append("c.race = ?"); params.append(race)
+        if trait:
+            clauses.append(TRAIT_SQL[trait])
+        if link_value:
+            clauses.append("c.link_value = ?"); params.append(link_value)
+        if def_min > 0:
+            clauses.append("c.def >= ?"); params.append(def_min)
+        if def_max > 0:
+            clauses.append("c.def <= ?"); params.append(def_max)
+        if wording:
+            clauses.append("c.wording_flags LIKE ?"); params.append(f"%,{wording},%")
         if only_collection:
             clauses.append(
                 "EXISTS (SELECT 1 FROM collection col WHERE col.card_id = c.id)"

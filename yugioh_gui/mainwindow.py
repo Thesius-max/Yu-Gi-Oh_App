@@ -16,9 +16,10 @@ import sys
 from PySide6.QtCore import QSettings, QThreadPool, QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressDialog,
-    QPushButton, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget
+    QApplication, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QProgressDialog, QPushButton, QSpinBox, QSplitter, QTabWidget,
+    QVBoxLayout, QWidget
 )
 
 import yugioh_db as ydb
@@ -27,13 +28,13 @@ from .carddetail import DetailPanel
 from .collection import CollectionView
 from .combos import ComboView
 from .deck import DeckView
-from .labels import ATTR_DE, TYPE_DE
+from .labels import ATTR_DE, RACE_DE, TYPE_DE
 from .manual import HelpView
 from ._rules import MODES as R_MODES
 from .playtest import PlayTestView
 from .rulebook import RulebookView
 from . import navigation
-from .repository import CardRepository
+from .repository import TRAITS, CardRepository
 from .tasks import DbTask, DbTaskSignals
 
 
@@ -167,6 +168,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(
                 2000, lambda: self._check_app_version(manual=False)
             )
+            # Nach einem App-Update: Kartendaten ohne Link-Pfeile?
+            QTimer.singleShot(1500, self._hint_missing_link_markers)
 
     def _build_filter_panel(self) -> QWidget:
         panel = QWidget()
@@ -186,20 +189,55 @@ class MainWindow(QMainWindow):
         for lvl in range(1, 13):
             self.level_cb.addItem(str(lvl), lvl)
 
-        self.atk_min = QSpinBox(); self.atk_min.setRange(0, 5000)
-        self.atk_min.setSingleStep(100); self.atk_min.setSpecialValueText("egal")
-        self.atk_max = QSpinBox(); self.atk_max.setRange(0, 5000)
-        self.atk_max.setSingleStep(100); self.atk_max.setSpecialValueText("egal")
+        self.race_cb = QComboBox()
+        self.trait_cb = QComboBox()
+        self.trait_cb.addItem("(alle)", None)
+        for key, label, _sql in TRAITS:
+            self.trait_cb.addItem(label, key)
+        self.link_cb = QComboBox()
+        self.link_cb.addItem("(alle)", None)
+        for lv in range(1, 7):
+            self.link_cb.addItem(f"Link-{lv}", lv)
+        self.wording_cb = QComboBox()
+        self.wording_cb.addItem("(alle)", None)
+        for key, label in ydb.WORDING_FILTERS:
+            self.wording_cb.addItem(label, key)
+        self.wording_cb.setToolTip(
+            "Nach dem Wortlaut des Kartentexts filtern (Lesehilfe, heuristisch) "
+            "— z. B. Handtraps, Schnelleffekte, hartes OPT")
 
-        for cb in (self.type_cb, self.attr_cb, self.arch_cb):
+        def stat_spin():
+            sp = QSpinBox()
+            sp.setRange(0, 5000)
+            sp.setSingleStep(100)
+            sp.setSpecialValueText("egal")
+            return sp
+
+        def range_row(lo, hi):
+            host = QWidget()
+            h = QHBoxLayout(host)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.addWidget(lo)
+            h.addWidget(QLabel("–"))
+            h.addWidget(hi)
+            return host
+
+        self.atk_min, self.atk_max = stat_spin(), stat_spin()
+        self.def_min, self.def_max = stat_spin(), stat_spin()
+
+        for cb in (self.type_cb, self.attr_cb, self.arch_cb, self.race_cb):
             cb.addItem("(alle)", None)
 
         fl.addRow("Typ", self.type_cb)
+        fl.addRow("Merkmal", self.trait_cb)
         fl.addRow("Attribut", self.attr_cb)
+        fl.addRow("Typ-Linie/Art", self.race_cb)
         fl.addRow("Archetyp", self.arch_cb)
         fl.addRow("Level/Rank", self.level_cb)
-        fl.addRow("ATK ab", self.atk_min)
-        fl.addRow("ATK bis", self.atk_max)
+        fl.addRow("Link", self.link_cb)
+        fl.addRow("ATK", range_row(self.atk_min, self.atk_max))
+        fl.addRow("DEF", range_row(self.def_min, self.def_max))
+        fl.addRow("Wortlaut", self.wording_cb)
 
         self.only_coll = QCheckBox("Nur meine Sammlung")
         search_btn = QPushButton("Suchen")
@@ -207,10 +245,11 @@ class MainWindow(QMainWindow):
         search_btn.clicked.connect(self.search)
 
         # Aenderungen an Filtern loesen direkt eine neue Suche aus.
-        for cb in (self.type_cb, self.attr_cb, self.arch_cb, self.level_cb):
+        for cb in (self.type_cb, self.attr_cb, self.arch_cb, self.level_cb,
+                   self.race_cb, self.trait_cb, self.link_cb, self.wording_cb):
             cb.currentIndexChanged.connect(self._on_filter_changed)
-        self.atk_min.valueChanged.connect(self._on_filter_changed)
-        self.atk_max.valueChanged.connect(self._on_filter_changed)
+        for sp in (self.atk_min, self.atk_max, self.def_min, self.def_max):
+            sp.valueChanged.connect(self._on_filter_changed)
         self.only_coll.stateChanged.connect(self._on_filter_changed)
 
         form.addWidget(self.search_box)
@@ -223,11 +262,12 @@ class MainWindow(QMainWindow):
         return panel
 
     def _populate_filters(self) -> None:
-        _col_trans = {"type": TYPE_DE, "attribute": ATTR_DE}
+        _col_trans = {"type": TYPE_DE, "attribute": ATTR_DE, "race": RACE_DE}
         for cb, col in (
             (self.type_cb, "type"),
             (self.attr_cb, "attribute"),
             (self.arch_cb, "archetype"),
+            (self.race_cb, "race"),
         ):
             trans = _col_trans.get(col, {})
             cb.blockSignals(True)
@@ -242,6 +282,14 @@ class MainWindow(QMainWindow):
     def search(self) -> None:
         if not self.repo.exists():
             return
+        wording = self.wording_cb.currentData()
+        if wording:
+            # Merkmale einmalig vorberechnen (~1 s, danach sofort).
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                ydb.ensure_wording_flags(self.repo.db_path)
+            finally:
+                QApplication.restoreOverrideCursor()
         cards = self.repo.query(
             text=self.search_box.text(),
             type=self.type_cb.currentData(),
@@ -250,6 +298,12 @@ class MainWindow(QMainWindow):
             level=self.level_cb.currentData(),
             atk_min=self.atk_min.value(),
             atk_max=self.atk_max.value(),
+            race=self.race_cb.currentData(),
+            trait=self.trait_cb.currentData(),
+            link_value=self.link_cb.currentData(),
+            def_min=self.def_min.value(),
+            def_max=self.def_max.value(),
+            wording=wording,
             only_collection=self.only_coll.isChecked(),
         )
         self.results.clear()
@@ -500,6 +554,29 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._start_update(confirmed=True)
+
+    def _hint_missing_link_markers(self) -> None:
+        """Einmaliger Hinweis, wenn die Kartendaten noch keine Link-Pfeile
+        haben (DB aelter als 0.9.1): das Spielfeld braucht sie fuer die
+        Zonenregeln. 'Nein' merkt sich die Wahl (QSettings), das Spielfeld-
+        Protokoll weist trotzdem weiter darauf hin."""
+        if not self.repo.exists() or QSettings().value(
+                "hints/link_markers_declined", False, type=bool):
+            return
+        missing = ydb.link_markers_missing(self.repo.db_path)
+        if not missing:
+            return
+        reply = QMessageBox.question(
+            self, "Link-Pfeile fehlen",
+            f"Deinen Kartendaten fehlen die Link-Pfeile ({missing} Link-Monster)."
+            "\nDas Spielfeld braucht sie, um die Zonen für Link-Beschwörungen "
+            "zu prüfen.\n\nJetzt die Kartendaten aktualisieren? (braucht "
+            "Internet; eigene Daten bleiben erhalten)",
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._start_update(confirmed=True)
+        else:
+            QSettings().setValue("hints/link_markers_declined", True)
 
     def _start_update(self, confirmed: bool = False) -> None:
         """Laedt alle Kartendaten neu. Benutzerdaten (Sammlung, Decks, Kombos,

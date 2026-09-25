@@ -225,6 +225,9 @@ def build_database(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('db_version', ?);",
                 (db_version,),
             )
+        # Kartentexte koennen sich geaendert haben: Wortlaut-Merkmale beim
+        # naechsten Bedarf neu berechnen (cards.ensure_wording_flags).
+        conn.execute("DELETE FROM meta WHERE key = 'wording_version';")
         conn.commit()
         return len(cards)
 
