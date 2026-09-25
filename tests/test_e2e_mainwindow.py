@@ -103,7 +103,8 @@ class StartupTests(E2ETestCase):
                          ydb.APP_VERSION)
         self.assertIn(f"v{ydb.APP_VERSION}", w.windowTitle())
         self.assertEqual([w.tabs.tabText(i) for i in range(w.tabs.count())],
-                         ["Suche", "Sammlung", "Deck", "Spielfeld", "Kombos", "Handbuch"])
+                         ["Suche", "Sammlung", "Deck", "Spielfeld", "Kombos", "Regelwerk",
+                          "Handbuch"])
         self.assertEqual(w.results.count(), 300)
         self.assertEqual(w.count_label.text(), "300 Treffer")
         self.assertEqual(w.type_cb.count(), 1 + len(w.repo.distinct("type")))
@@ -553,6 +554,62 @@ class DataMenuFlowTests(E2ETestCase):
             open_url.assert_not_called()
 
 
+class RulebookFlowTests(E2ETestCase):
+    """Regelwerk-Tab als Sprungziel: aus der Wortlaut-Lesehilfe im Suche-Tab
+    und aus dem Spielfeld-Protokoll; eigene Rulings erreichen das Spielfeld."""
+
+    ASH = 14558127
+    BONE = 25784595
+
+    def test_wording_link_jumps_to_rulebook_chapter(self):
+        from PySide6.QtCore import QUrl
+        w = self.window()
+        self.search_and_select(w, self.ASH)
+
+        def follow_link(dlg):
+            self.assertIn("Schnelleffekt", dlg.browser.toPlainText())
+            dlg._on_link(QUrl("rulebook:kartentext"))
+            return dlg.result()
+        self.ui.dialogs["WordingDialog"] = follow_link
+        self.click(w.detail, "Wortlaut ?")
+        self.assertIs(w.tabs.currentWidget(), w.rulebook_view)
+        self.assertEqual(w.rulebook_view.current_key(), "kartentext")
+        self.assertIn("Doppelpunkt", w.rulebook_view.content.toPlainText())
+
+    def test_playfield_warning_jumps_to_rulebook(self):
+        w = self.window()
+        self.use_deck(w)
+        w.tabs.setCurrentWidget(w.playtest_view)
+        pv = w.playtest_view
+        self.assertEqual(pv.rule_mode, "warn")
+        pv._set_phase("BP")                    # Zug 1: keine Battle Phase
+        warnings = [pv.log_list.item(i) for i in range(pv.log_list.count())
+                    if pv.log_list.item(i).text().startswith("⚠")]
+        self.assertEqual(len(warnings), 1)
+        item = warnings[0]
+        self.assertIn("keine Battle Phase", item.text())
+        pv._open_log_topic(item)
+        self.assertIs(w.tabs.currentWidget(), w.rulebook_view)
+        self.assertEqual(w.rulebook_view.current_key(), "phasen")
+
+    def test_own_ruling_reaches_the_playfield(self):
+        w = self.window()
+        self.search_and_select(w, self.BONE)
+
+        def add(dlg):
+            self.ui.dialogs["_RulingEditDialog"] = lambda e: (
+                e.text_edit.setPlainText("Lock gilt auch ohne Auflösung?"),
+                QDialog.DialogCode.Accepted)[1]
+            dlg._add()
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["CardRulingsDialog"] = add
+        self.click(w.detail, "Rulings")
+        self.assertEqual(w.detail.rulings_btn.text(), "Rulings (1)")
+        self.use_deck(w)
+        w.tabs.setCurrentWidget(w.playtest_view)
+        self.assertEqual(w.playtest_view._ruling_counts.get(self.BONE), 1)
+
+
 class SessionStateTests(E2ETestCase):
     """Sitzungs-/Fensterstatus mit auf einen Temp-Ordner umgeleiteten
     INI-Settings -- die echten Einstellungen (Registry) bleiben unberuehrt."""
@@ -605,6 +662,23 @@ class SessionStateTests(E2ETestCase):
         expected = ydb.list_collection(self.db, text="Drache", category="monster",
                                        untranslated_only=True)
         self.assertEqual(len(shown), len(expected))
+
+    def test_tab_is_restored_by_title_and_legacy_index(self):
+        w = self.window()
+        w.tabs.setCurrentWidget(w.rulebook_view)
+        w._save_session_state()
+        self.assertEqual(QSettings().value("ui/tab"), "Regelwerk")
+        w2 = self.window()
+        w2._restore_session_state()
+        self.assertIs(w2.tabs.currentWidget(), w2.rulebook_view)
+        QSettings().setValue("ui/tab", 2)          # Stand vor dem Regelwerk-Tab
+        w3 = self.window()
+        w3._restore_session_state()
+        self.assertIs(w3.tabs.currentWidget(), w3.deck_view)
+        QSettings().setValue("ui/tab", 5)          # alter Index des Handbuchs
+        w4 = self.window()
+        w4._restore_session_state()
+        self.assertEqual(w4.tabs.tabText(w4.tabs.currentIndex()), "Handbuch")
 
     def test_restore_with_empty_settings_keeps_defaults(self):
         w = self.window()

@@ -204,3 +204,9 @@ GROUP_HEADER_BG = QColor(_PANEL)
 GROUP_HEADER_FG = QColor(_GOLD)
 UNTRANSLATED_FG = QColor("#e08a3c")
 
+# Wortlaut-Lesehilfe: Farben je Textteil (Bedingung / Kosten+Ziel /
+# Aufloesung / Einschraenkung), als HTML-Farben fuer das QTextBrowser-Markup.
+WORDING_COLORS = {
+    "condition": _GOLD, "cost": "#7fd18b", "effect": "#8fc7ff",
+    "limit": "#c79bff", "plain": _TEXT,
+}

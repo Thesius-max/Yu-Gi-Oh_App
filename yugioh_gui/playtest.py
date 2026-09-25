@@ -23,13 +23,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-    QInputDialog, QLabel, QListWidget, QMenu, QMessageBox, QPushButton,
+    QInputDialog, QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+    QPushButton,
     QScrollArea, QVBoxLayout, QWidget
 )
 
 import yugioh_db as ydb
 
 from . import _rules as R
+from . import navigation
 from ._cardinst import _CardInst
 from ._game import PHASE_KEYS, PHASES, Game
 from .carddetail import CardDetailDialog, CardSearchDialog
@@ -163,6 +165,7 @@ class PlayTestView(QWidget):
         self._undo: list[dict] = []
         self._detail_dialog: CardDetailDialog | None = None
         self._token_ids = itertools.count(-1, -1)  # Spielmarken: negative ids
+        self._ruling_counts: dict[int, int] = {}   # eigene Rulings je Karte
         self.rule_mode = "warn"
         self.open_combo_callback = None   # setzt MainWindow
 
@@ -356,6 +359,7 @@ class PlayTestView(QWidget):
         self.log_list.setObjectName("RuleLog")
         self.log_list.setWordWrap(True)
         self.log_list.setMinimumWidth(240)
+        self.log_list.itemDoubleClicked.connect(self._open_log_topic)
         side.addWidget(self.log_list, stretch=1)
         body.addLayout(side)
         outer.addLayout(body, stretch=1)
@@ -382,7 +386,7 @@ class PlayTestView(QWidget):
             self._deck_id = new_id
             self.reset()
         else:
-            self._render()
+            self.reload_ruling_counts()   # Rulings evtl. in anderem Tab geaendert
 
     def _on_deck_selected(self, _index: int) -> None:
         if not self._confirm_discard_recording():
@@ -444,9 +448,21 @@ class PlayTestView(QWidget):
             self._names, self._info = {}, {}
             self._extra_ids = set()
             self._deck_copies = {}
+        self._ruling_counts = self._load_ruling_counts()
         self.log_list.clear()
         self._log("Neues Spiel — " + ("du beginnst" if g.going_first
                                       else "du bist Zweiter"))
+        self._render()
+
+    def _load_ruling_counts(self) -> dict[int, int]:
+        ids = [cid for cid in self._info if cid > 0]
+        if not ids or not self.repo.exists():
+            return {}
+        return ydb.card_ruling_counts(self.repo.db_path, ids)
+
+    def reload_ruling_counts(self) -> None:
+        """Zaehler eigener Rulings neu laden (Tooltips 📌) und neu zeichnen."""
+        self._ruling_counts = self._load_ruling_counts()
         self._render()
 
     def _mk_inst(self, card_id: int, owner: str = "me") -> _CardInst:
@@ -481,13 +497,25 @@ class PlayTestView(QWidget):
     def _rules_on(self) -> bool:
         return self.rule_mode != "off"
 
-    def _log(self, text: str) -> None:
-        self.log_list.addItem(text)
+    def _log(self, text: str, topic: str | None = None) -> None:
+        """Protokollzeile; mit 'topic' (Regelwerk-Kapitel) springt ein
+        Doppelklick auf die Zeile ins Regelwerk."""
+        item = QListWidgetItem(text)
+        if topic:
+            item.setData(Qt.ItemDataRole.UserRole, topic)
+            item.setToolTip("Doppelklick: im Regelwerk nachlesen")
+        self.log_list.addItem(item)
         while self.log_list.count() > _LOG_MAX:
             self.log_list.takeItem(0)
         self.log_list.scrollToBottom()
 
-    def _allowed(self, verdict: R.Verdict, action: str) -> bool:
+    def _open_log_topic(self, item: QListWidgetItem) -> None:
+        topic = item.data(Qt.ItemDataRole.UserRole)
+        if topic:
+            navigation.open_rulebook(topic)
+
+    def _allowed(self, verdict: R.Verdict, action: str,
+                 topic: str = "beschwoerung") -> bool:
         """Regel-Befund je Modus umsetzen: aus -> immer erlaubt; warnen ->
         protokollieren und erlauben; erzwingen -> bei Verstoessen nachfragen
         (ein Karteneffekt kann die Ausnahme erlauben -- das weiss nur der
@@ -495,12 +523,12 @@ class PlayTestView(QWidget):
         if not self._rules_on:
             return True
         for note in verdict.notes:
-            self._log(f"ℹ {note}")
+            self._log(f"ℹ {note}", topic)
         if not verdict.violations:
             return True
         text = "; ".join(verdict.violations)
         if self.rule_mode == "warn":
-            self._log(f"⚠ {action}: {text}")
+            self._log(f"⚠ {action}: {text}", topic)
             return True
         answer = QMessageBox.question(
             self, "Regelverstoß",
@@ -508,9 +536,9 @@ class PlayTestView(QWidget):
             + "\n\nTrotzdem ausführen (z. B. weil ein Karteneffekt es erlaubt)?",
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self._log(f"⚠ {action} (per Effekt erlaubt): {text}")
+            self._log(f"⚠ {action} (per Effekt erlaubt): {text}", topic)
             return True
-        self._log(f"✋ {action} abgelehnt: {text}")
+        self._log(f"✋ {action} abgelehnt: {text}", topic)
         return False
 
     def _choose(self, options: list[tuple[str, str]]) -> str | None:
@@ -716,12 +744,13 @@ class PlayTestView(QWidget):
             self._render()
             return
         if not self._allowed(R.check_phase_change(g, target),
-                             f"Wechsel in die {self._phase_name(target)} Phase"):
+                             f"Wechsel in die {self._phase_name(target)} Phase",
+                             "phasen"):
             self._render()
             return
         self._push_undo()
         g.phase = target
-        self._log(f"Zug {g.turn} · {self._phase_name(target)} Phase")
+        self._log(f"Zug {g.turn} · {self._phase_name(target)} Phase", "phasen")
         self._render()
 
     def next_phase(self) -> None:
@@ -745,12 +774,12 @@ class PlayTestView(QWidget):
             self._push_undo()
             self._held = None
             g.next_turn()
-            self._log(f"Zug {g.turn} · Gegnerzug")
+            self._log(f"Zug {g.turn} · Gegnerzug", "phasen")
         else:
             self._push_undo()
             self._held = None
             g.next_turn()
-            self._log(f"Zug {g.turn} · dein Zug — Draw Phase")
+            self._log(f"Zug {g.turn} · dein Zug — Draw Phase", "phasen")
             if g.me.deck:
                 self._draw_one()
             else:
@@ -773,7 +802,7 @@ class PlayTestView(QWidget):
 
         chosen = self._pick_cards(f"Handlimit: {excess} abwerfen", hand,
                                   [c.name for c in hand], check, "Abwerfen") or []
-        if not self._allowed(check(chosen), "Zug beenden"):
+        if not self._allowed(check(chosen), "Zug beenden", "phasen"):
             return False
         if chosen:
             self._push_undo()
@@ -1003,6 +1032,7 @@ class PlayTestView(QWidget):
             return
         info = self._info_of(cid)
         self._names.setdefault(cid, info["name"])
+        self._ruling_counts.update(ydb.card_ruling_counts(self.repo.db_path, [cid]))
         if R.is_monster(info):
             options = [("atk", "Monsterzone (offen, Angriff)"),
                        ("setm", "Monsterzone (verdeckt, Verteidigung)")]
@@ -1366,7 +1396,8 @@ class PlayTestView(QWidget):
             return
         activate = choice == "act"
         v = R.check_spell_trap_from_hand(g, held, info, zone, activate)
-        if not self._allowed(v, f"{'Aktivieren' if activate else 'Setzen'} {held.name}"):
+        if not self._allowed(v, f"{'Aktivieren' if activate else 'Setzen'} {held.name}",
+                             "kartenarten"):
             return
         self._push_undo()
         old = g.get(zone)
@@ -1502,13 +1533,13 @@ class PlayTestView(QWidget):
                                  f"Flippbeschwörung {inst.name}")
         if action == "pos":
             return self._allowed(R.check_position_change(g, inst, info),
-                                 f"Positionswechsel {inst.name}")
+                                 f"Positionswechsel {inst.name}", "kampf")
         if not inst.face_down:
             return self._allowed(R.check_turn_face_down(inst, info, zone),
-                                 f"{inst.name} verdecken")
+                                 f"{inst.name} verdecken", "kampf")
         if not mon_zone:
             return self._allowed(R.check_activate_set(g, inst, info),
-                                 f"{inst.name} aktivieren")
+                                 f"{inst.name} aktivieren", "kartenarten")
         return True                         # 'Aufdecken (Effekt)'
 
     def _change_stats(self, inst: _CardInst, info: dict) -> None:
@@ -1558,7 +1589,7 @@ class PlayTestView(QWidget):
             return
         target = None if choice == "direct" else targets[int(choice)]
         if not self._allowed(R.check_attack(g, attacker, target),
-                             f"Angriff mit {attacker.name}"):
+                             f"Angriff mit {attacker.name}", "kampf"):
             return
         self._push_undo()
         g.flags["attacked"].add(attacker.uid)
@@ -1588,7 +1619,7 @@ class PlayTestView(QWidget):
             outcome.append(f"Gegner −{res.damage_opp} LP")
         if res.damage_me:
             outcome.append(f"du −{res.damage_me} LP")
-        self._log(f"⚔ {desc}: " + (", ".join(outcome) or "kein Effekt"))
+        self._log(f"⚔ {desc}: " + (", ".join(outcome) or "kein Effekt"), "kampf")
         self._check_lp()
         self._render()
 
@@ -1597,6 +1628,7 @@ class PlayTestView(QWidget):
             return
         if self._detail_dialog is None:
             self._detail_dialog = CardDetailDialog(self.repo, self)
+            self._detail_dialog.rulings_changed.connect(self.reload_ruling_counts)
         self._detail_dialog.load(card_id)
         self._detail_dialog.show()
         self._detail_dialog.raise_()
@@ -1710,6 +1742,9 @@ class PlayTestView(QWidget):
             lines.append("Material: " + ", ".join(m.name for m in inst.materials))
         if inst.counters:
             lines.append(f"Zählmarken: {inst.counters}")
+        n = self._ruling_counts.get(inst.card_id)
+        if n:
+            lines.append(f"📌 {n} eigene Ruling(s) — Rechtsklick → Details… → Rulings")
         return "\n".join(lines)
 
     def _make_card(self, inst: _CardInst, board: bool = False) -> _BoardCard:

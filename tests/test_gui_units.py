@@ -633,5 +633,131 @@ class ThemeAndManualTests(QtTestCase):
             self.assertIn(token, NOTATION_MD)
 
 
+class RulebookAndCardHelpTests(QtTestCase):
+    """Regelwerk-Tab (DocView mit Suche), Sprung-Navigation, Wortlaut-
+    Lesehilfe und Rulings-Dialog in den Kartendetails."""
+
+    ASH = 14558127
+
+    def setUp(self):
+        super().setUp()
+        from yugioh_gui import navigation
+        self.nav = navigation
+        self.addCleanup(navigation.set_rulebook_opener, None)
+        patcher = mock.patch.object(carddetail.QDesktopServices, "openUrl")
+        self.open_url = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_rulebook_search_and_jump(self):
+        from yugioh_gui.rulebook import RulebookView
+        from yugioh_gui.rulebook_text import RULEBOOK_SECTIONS
+        view = self.track(RulebookView())
+        self.assertEqual(view.index.count(), len(RULEBOOK_SECTIONS))
+        view.search.setText("zauberschnelligkeit")        # casefold-Suche
+        visible = [view.index.item(i).data(Qt.ItemDataRole.UserRole)
+                   for i in range(view.index.count()) if not view.index.item(i).isHidden()]
+        self.assertIn("ketten", visible)
+        self.assertNotIn("ziel", visible)
+        self.assertIn("Kapitel", view.hits.text())
+        self.assertIn(view.current_key(), visible)
+        view.search.setText("gibt es garantiert nicht xyz")
+        self.assertEqual(view.content.toPlainText(), "")
+        self.assertTrue(view.show_section("kampf"))       # leert die Suche
+        self.assertEqual(view.search.text(), "")
+        self.assertEqual(view.current_key(), "kampf")
+        self.assertIn("Schadensberechnung", view.content.toPlainText())
+        self.assertFalse(view.show_section("unbekannt"))
+
+    def test_navigation_without_or_with_dead_opener(self):
+        self.nav.set_rulebook_opener(None)
+        self.assertFalse(self.nav.open_rulebook("kampf"))
+
+        class Host:
+            def __init__(self):
+                self.calls = []
+
+            def go(self, key):
+                self.calls.append(key)
+        host = Host()
+        self.nav.set_rulebook_opener(host.go)
+        self.assertTrue(self.nav.open_rulebook("kampf"))
+        self.assertFalse(self.nav.open_rulebook(""))
+        self.assertEqual(host.calls, ["kampf"])
+        del host                                           # schwach referenziert
+        import gc
+        gc.collect()
+        self.assertFalse(self.nav.open_rulebook("kampf"))
+
+    def test_wording_html_and_links(self):
+        repo = CardRepository(self.db)
+        card = repo.get_card(self.ASH)
+        html_text = carddetail.wording_html(card)
+        self.assertIn("Schnelleffekt", html_text)
+        self.assertIn('href="rulebook:ketten"', html_text)
+        self.assertIn("Deutscher Kartentext", html_text)
+        calls = []
+        self.nav.set_rulebook_opener(calls.append)
+        dlg = self.track(carddetail.WordingDialog(card))
+        dlg._on_link(carddetail.QUrl("rulebook:kartentext"))
+        self.assertEqual(calls, ["kartentext"])
+        self.assertEqual(dlg.result(), QDialog.DialogCode.Accepted)
+        dlg._on_link(carddetail.QUrl("https://example.org"))
+        self.open_url.assert_called_once()
+
+    def test_detail_panel_rulings_dialog_crud(self):
+        repo = CardRepository(self.db)
+        panel = self.track(carddetail.DetailPanel(repo))
+        panel.show_card(repo.get_card(self.ASH))
+        self.assertEqual(panel.rulings_btn.text(), "Rulings")
+        emitted = []
+        panel.rulings_changed.connect(lambda: emitted.append(1))
+        edits = [("Antwortet auch auf Effekte im Friedhof", "Konami-FAQ"),
+                 ("Geändert", "")]
+
+        def edit(dlg):
+            text, source = edits.pop(0)
+            dlg.text_edit.setPlainText(text)
+            dlg.source_edit.setText(source)
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["_RulingEditDialog"] = edit
+
+        def add_and_edit(dlg):
+            dlg._add()
+            self.assertEqual(dlg.listw.count(), 1)
+            self.assertIn("Konami-FAQ", dlg.listw.item(0).text())
+            dlg._edit()
+            self.assertTrue(dlg.listw.item(0).text().startswith("Geändert"))
+            buttons = [b.text() for b in dlg.findChildren(carddetail.QPushButton)]
+            self.assertIn("Konami (englisch, mit FAQ)", buttons)
+            self.assertIn("Yugipedia", buttons)
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["CardRulingsDialog"] = add_and_edit
+        panel._open_rulings()
+        self.assertEqual(panel.rulings_btn.text(), "Rulings (1)")
+        self.assertEqual(emitted, [1])
+
+        def delete(dlg):
+            dlg._delete()
+            self.assertEqual(dlg.listw.count(), 0)
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["CardRulingsDialog"] = delete
+        panel._open_rulings()
+        self.assertEqual(panel.rulings_btn.text(), "Rulings")
+        self.assertEqual(ydb.list_card_rulings(self.db, self.ASH), [])
+
+    def test_detail_dialog_has_help_buttons(self):
+        repo = CardRepository(self.db)
+        dlg = self.track(carddetail.CardDetailDialog(repo))
+        dlg.load(self.ASH)
+        ydb.add_card_ruling(self.db, self.ASH, "x")
+        dlg.load(self.ASH)
+        self.assertEqual(dlg.rulings_btn.text(), "Rulings (1)")
+        seen = []
+        self.ui.dialogs["WordingDialog"] = lambda d: seen.append(
+            d.browser.toPlainText()) or QDialog.DialogCode.Accepted
+        dlg._open_wording()
+        self.assertIn("Kosten", seen[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -30,7 +30,7 @@ from tests.test_rules import (
 )
 
 if HAS_QT:
-    from PySide6.QtCore import QEvent, QPoint
+    from PySide6.QtCore import QEvent, QPoint, Qt
     from PySide6.QtWidgets import QApplication, QDialog, QMenu
 
 
@@ -681,6 +681,32 @@ class RulesViewTests(_PlayTestBase):
         CTRL["menu_picks"] = ["Direkter Angriff"]
         self._menu(v.game.me.m[0], "Angreifen…")
         self.assertEqual(v.game.opp.lp, 8000 - ((v._info_of(BONE)["atk"] or 0) + 1000))
+
+    # -- Regelwerk-Verweise ---------------------------------------------------------
+
+    def test_rule_warning_links_to_rulebook(self):
+        from yugioh_gui import navigation
+        calls = []
+        navigation.set_rulebook_opener(calls.append)
+        self.addCleanup(navigation.set_rulebook_opener, None)
+        v = self.v
+        v.game.ns_used = 1
+        self.play(self.take(BONE), "m0", "Normalbeschwörung")
+        item = v.log_list.item(v.log_list.count() - 1)
+        self.assertTrue(item.text().startswith("⚠"))
+        self.assertEqual(item.data(Qt.ItemDataRole.UserRole), "beschwoerung")
+        v._open_log_topic(item)
+        v._open_log_topic(v.log_list.item(0))              # ohne Kapitel: nichts
+        self.assertEqual(calls, ["beschwoerung"])
+
+    def test_tooltip_shows_own_rulings(self):
+        v = self.v
+        bone = self.board(BONE, "m0")
+        self.assertNotIn("📌", v._tooltip(bone))
+        rid = ydb.add_card_ruling(self.db, BONE, "Test-Ruling")
+        self.addCleanup(ydb.delete_card_ruling, self.db, rid)
+        v.refresh()                                         # Tab-Wechsel laedt neu
+        self.assertIn("📌 1 eigene Ruling", v._tooltip(v.game.me.m[0]))
 
     # -- Fuzz ---------------------------------------------------------------------
 

@@ -31,6 +31,8 @@ from .labels import ATTR_DE, TYPE_DE
 from .manual import HelpView
 from ._rules import MODES as R_MODES
 from .playtest import PlayTestView
+from .rulebook import RulebookView
+from . import navigation
 from .repository import CardRepository
 from .tasks import DbTask, DbTaskSignals
 
@@ -62,6 +64,10 @@ class _BusyDialog(QProgressDialog):
             event.ignore()
         else:
             super().closeEvent(event)
+
+
+# Tab-Reihenfolge, als die Sitzung den Tab noch als Index speicherte.
+_LEGACY_TABS = ("Suche", "Sammlung", "Deck", "Spielfeld", "Kombos", "Handbuch")
 
 
 class MainWindow(QMainWindow):
@@ -124,7 +130,13 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.deck_view, "Deck")
         self.tabs.addTab(self.playtest_view, "Spielfeld")
         self.tabs.addTab(self.combo_view, "Kombos")
+        self.rulebook_view = RulebookView()
+        self.tabs.addTab(self.rulebook_view, "Regelwerk")
         self.tabs.addTab(HelpView(), "Handbuch")
+        # Spruenge ins Regelwerk (Kartendetails, Wortlaut, Spielfeld-Protokoll)
+        navigation.set_rulebook_opener(self.open_rulebook)
+        # Geaenderte Rulings: Spielfeld-Tooltips aktualisieren.
+        self.detail.rulings_changed.connect(self.playtest_view.reload_ruling_counts)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
         self._build_data_menu()
@@ -290,6 +302,13 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)  # Suche-Tab haelt das DetailPanel
         self.detail.show_card(card)
 
+    def open_rulebook(self, key: str) -> None:
+        """Regelwerk-Tab mit Kapitel 'key' zeigen (Ziel von navigation)."""
+        if self.rulebook_view.show_section(key):
+            self.tabs.setCurrentWidget(self.rulebook_view)
+            self.raise_()
+            self.activateWindow()
+
     def closeEvent(self, event) -> None:
         # Noch nicht gespeicherte Kombo-Eingaben sichern (Auto-Save-Timer
         # koennte sonst verfallen).
@@ -305,7 +324,8 @@ class MainWindow(QMainWindow):
         s = QSettings()
         s.setValue("win/geometry", self.saveGeometry())
         s.setValue("win/splitter", self.splitter.saveState())
-        s.setValue("ui/tab", self.tabs.currentIndex())
+        # Tab per Titel statt Index: neue Tabs verschieben sonst den Stand.
+        s.setValue("ui/tab", self.tabs.tabText(self.tabs.currentIndex()))
         did = self.deck_view.deck_id
         s.setValue("ui/deck_id", -1 if did is None else int(did))
         cv = self.collection_view
@@ -356,9 +376,15 @@ class MainWindow(QMainWindow):
         if mode in {key for key, _ in R_MODES}:
             self.playtest_view.set_rule_mode(mode)
         # Zuletzt aktives Tab.
-        tab = s.value("ui/tab", 0, type=int)
-        if tab is not None and 0 <= tab < self.tabs.count():
-            self.tabs.setCurrentIndex(tab)
+        tab = s.value("ui/tab", "")
+        titles = [self.tabs.tabText(i) for i in range(self.tabs.count())]
+        if isinstance(tab, str) and tab in titles:
+            self.tabs.setCurrentIndex(titles.index(tab))
+        elif str(tab).isdigit() and int(tab) < len(_LEGACY_TABS):
+            # Alter Stand (Index vor dem Regelwerk-Tab) -> gleicher Tab per Titel.
+            old = _LEGACY_TABS[int(tab)]
+            if old in titles:
+                self.tabs.setCurrentIndex(titles.index(old))
 
     # -- Kartendaten-Update (Menü 'Daten') ------------------------------------
 
