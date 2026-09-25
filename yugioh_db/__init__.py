@@ -11,7 +11,9 @@ der Module (Importe strikt einbahnig, keine Zyklen):
     schema  -- Ablageorte, Verbindungen, DDL (Basis, importiert nichts)
     api     -- YGOPRODeck-Requests, Bild-Cache, build_database
     updates -- APP_VERSION, Update-Check, Migrations-Backup
-    cards   -- Klassifikation, DE-Uebersetzungen
+    cards   -- Klassifikation, DE-Uebersetzungen, Spielfeld-Kartenwerte
+    rulings -- eigene Rulings je Karte, Links zu offiziellen Quellen
+    wording -- Lesehilfe: Kartentext (PSCT) in Bedingung/Kosten/Effekt zerlegen
     collection / decks -- Benutzerdaten (Bestand, Decks, .ydk)
     combos  -- Kombo-Bibliothek (Bausteine, Rollen, Abdeckung)
     analysis -- Konsistenz-Mathematik, Synergie-Graph, Vorschlaege
@@ -22,6 +24,8 @@ from .schema import *  # noqa: F401,F403
 from .api import *  # noqa: F401,F403
 from .updates import *  # noqa: F401,F403
 from .cards import *  # noqa: F401,F403
+from .rulings import *  # noqa: F401,F403
+from .wording import *  # noqa: F401,F403
 from .collection import *  # noqa: F401,F403
 from .decks import *  # noqa: F401,F403
 from .combos import *  # noqa: F401,F403

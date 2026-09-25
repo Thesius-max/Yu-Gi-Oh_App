@@ -155,7 +155,8 @@ class SchemaTests(CardIdsTestCase):
         names = {r[1] for r in self._schema(fresh)}
         for table in ("meta", "cards", "card_sets", "cards_fts", "collection",
                       "card_translations", "decks", "deck_cards", "combos",
-                      "combo_cards", "combo_steps", "idx_cards_disp_name"):
+                      "combo_cards", "combo_steps", "idx_cards_disp_name",
+                      "card_rulings"):
             self.assertIn(table, names)
         self.assertIsNone(ydb.local_db_version(fresh))
 

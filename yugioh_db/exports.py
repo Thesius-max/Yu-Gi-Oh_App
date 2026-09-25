@@ -21,6 +21,7 @@ from .combos import (
     combo_variants, combos_for_deck, deck_role_summary, get_combo,
 )
 from .decks import deck_cards
+from .rulings import list_card_rulings
 from .schema import _conn
 
 
@@ -223,10 +224,12 @@ def _md_fence(content: str) -> str:
 
 
 def _card_md_block(
-    d: Optional[sqlite3.Row], lead: str, roles: Optional[list[str]] = None
+    d: Optional[sqlite3.Row], lead: str, roles: Optional[list[str]] = None,
+    rulings: Optional[list[sqlite3.Row]] = None,
 ) -> list[str]:
     """Markdown-Block einer Karte: Ueberschrift (lead = z.B. '3x '), Typzeile,
-    optional Archetyp/Rolle und der volle Effekttext (eingerueckt)."""
+    optional Archetyp/Rolle, der volle Effekttext (eingerueckt) und eigene
+    Rulings."""
     if d is None:
         return [f"### {lead}(unbekannte Karte)", ""]
     block = [f"### {lead}{_md_inline(d['name'])}", f"- Typ: {_card_meta_line(d)}"]
@@ -242,6 +245,10 @@ def _card_md_block(
         block.append(f"- Effekt: {indented}")
     else:
         block.append("- Effekt: (kein Kartentext vorhanden)")
+    for r in rulings or ():
+        src = f" (Quelle: {_md_inline(r['source'])})" if r["source"] else ""
+        text = r["text"].replace("\r\n", "\n").replace("\n", "\n  ")
+        block.append(f"- Ruling: {text}{src}")
     block.append("")
     return block
 
@@ -398,7 +405,8 @@ def export_deck_markdown(db_path: str, deck_id: int) -> str:
         for r in rows:
             roles = sorted(role_map.get(r["card_id"], []), key=COMBO_ROLES.index)
             lines += _card_md_block(
-                details.get(r["card_id"]), f"{r['quantity']}x ", roles or None
+                details.get(r["card_id"]), f"{r['quantity']}x ", roles or None,
+                list_card_rulings(db_path, r["card_id"]),
             )
     # Konsistenz + Kombo-Linien aus der bestehenden Funktion (eine Quelle der
     # Wahrheit); woertlich in einen Codeblock gesetzt, damit das Textlayout

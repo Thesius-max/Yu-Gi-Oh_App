@@ -115,6 +115,17 @@ CREATE TABLE IF NOT EXISTS card_translations (
     desc_de  TEXT
 );
 
+-- Eigene Rulings je Karte (Benutzerdaten): Notiz + Quelle. Ueberlebt
+-- Daten-Updates, weil cards nie geloescht, nur per UPSERT aktualisiert wird.
+CREATE TABLE IF NOT EXISTS card_rulings (
+    ruling_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id   INTEGER NOT NULL REFERENCES cards(id),
+    text      TEXT NOT NULL,
+    source    TEXT,
+    created   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_card_rulings_card ON card_rulings(card_id);
+
 -- Decks und ihre Karten (Main/Extra/Side).
 -- kind='reference' markiert importierte Meta-Listen (Korpus fuer den
 -- Synergie-Graphen); NULL = eigenes Deck. source = Herkunft (Turnier/URL/
