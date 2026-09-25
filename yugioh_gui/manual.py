@@ -39,7 +39,7 @@ lokal gehalten — **danach arbeitet die App offline**.
 | **Suche** | Karten finden, Details ansehen, in Sammlung/Deck/Kombo übernehmen |
 | **Sammlung** | dein physischer Kartenbestand |
 | **Deck** | Decks bauen, prüfen, importieren/exportieren, Kombo-Hilfe |
-| **Spielfeld** | Decks solo testen (Goldfishing), Züge als Kombo aufzeichnen |
+| **Spielfeld** | Decks testen — mit Regelwerk, Dummy-Gegner und Kombo-Recorder |
 | **Kombos** | Kombo-Linien dokumentieren (Bausteine, Rollen, Schritte) |
 | **Handbuch** | diese Hilfe |
 
@@ -194,23 +194,113 @@ Fünf Reiter:
 """),
 
     ("Spielfeld-Tab", """\
-# Spielfeld (Goldfishing)
+# Spielfeld
 
-Ein **Solitaire-Sandkasten**: Deck wählen, Starthand ziehen und Linien frei
-durchspielen — **ohne Regeln, ohne Gegner**. Der Spielzustand selbst wird
-nicht gespeichert; **Neue Starthand** beginnt von vorn. Dauerhaft bleibt nur,
-was du mit dem **Kombo-Recorder** (siehe unten) ausdrücklich als Kombo
-speicherst.
+Deck wählen, Starthand ziehen und Linien durchspielen — frei als
+Sandkasten oder mit **Regelwerk** und einem **Dummy-Gegner**. Der
+Spielzustand selbst wird nicht gespeichert; **Neue Starthand** beginnt von
+vorn. Dauerhaft bleibt nur, was du mit dem **Kombo-Recorder** (siehe unten)
+ausdrücklich als Kombo speicherst.
+
+## Zug, Phasen und Lebenspunkte
+
+Die Leiste unter der Werkzeugleiste zeigt **Zug** und **Phase** (Draw,
+Standby, Main 1, Battle, Main 2, End). Eine Phase anklicken springt dorthin,
+**Nächste Phase ▸** geht einen Schritt weiter. **Zug beenden** übergibt an
+den Gegner, **Gegnerzug beenden** beginnt deinen nächsten Zug — mit
+automatischem Ziehen in der Draw Phase. Mit **5 (First)** beginnst du in
+Zug 1, mit **6 (Second)** bist du Zweiter (Zug 2).
+
+Rechts stehen die **Lebenspunkte** beider Spieler (**± LP** für Effekt-
+Schaden oder -Gewinne) und das **Protokoll** mit Zugwechseln, Kämpfen und
+Regel-Hinweisen.
+
+## Regelwerk: aus · warnen · erzwingen
+
+Das Auswahlfeld rechts in der Phasenleiste schaltet das Regelwerk (die
+Wahl bleibt über App-Neustarts erhalten):
+
+- **Regeln aus** — freier Sandkasten wie früher, keine Rückfragen.
+- **Regeln: warnen** (Standard) — Verstöße landen als ⚠ im Protokoll, die
+  Aktion passiert trotzdem.
+- **Regeln: erzwingen** — bei einem Verstoß fragt die App nach. Mit **Ja**
+  führst du die Aktion trotzdem aus („per Effekt erlaubt“), mit **Nein**
+  wird sie abgelehnt.
+
+Geprüft wird die **allgemeine Spielmechanik** — nie Kartentexte:
+
+- **Normalbeschwörung/Setzen**: einmal pro Zug in der Main Phase
+  (**+1 Normalbeschwörung** gewährt eine zusätzliche per Effekt), ab Stufe 5
+  mit Tribut-Auswahl (5–6: 1 Tribut, ab 7: 2 Tribute). Ritual- und Extra-
+  Deck-Monster können nicht normalbeschworen werden; Ritualmonster haben
+  eine eigene **Ritualbeschwörung** mit Tribut-Auswahl (Stufensumme).
+- **Extra Deck**: Beim Ablegen fragt die App nach der Beschwörungsart und
+  lässt dich die **Materialien** ankreuzen — mit Live-Prüfung:
+  Synchro = genau 1 Empfänger + Stufensumme, Xyz = mindestens 2 Monster
+  gleicher Stufe (sie bleiben als Xyz-Material **unter** dem Monster),
+  Link = Anzahl passend zum Link-Wert (Link-Monster zählen als 1 oder mit
+  ihrem Link-Wert), Fusion = mindestens 2 Materialien (auch aus der Hand).
+  Materialien gehen danach automatisch in den Friedhof.
+- **Zonen** (Master Rule 2020): Extra-Monsterzonen nur für Monster aus dem
+  Extra Deck und nur eine pro Spieler; **Link-Monster aus dem Extra Deck**
+  brauchen eine Extra-Monsterzone oder eine Zone, auf die ein **Link-Pfeil**
+  zeigt (Fusion/Synchro/Xyz dürfen in jede freie Zone). Gültige Zielzonen leuchten gold, sobald du ein
+  Extra-Deck-Monster aufnimmst.
+- **Zauber und Fallen**: Zauber nur im eigenen Zug (normale nur in der Main
+  Phase, Schnellzauber jederzeit im eigenen Zug), **Fallen erst setzen**
+  und frühestens im nächsten Zug aktivieren (gesetzte Schnellzauber
+  ebenso). Feldzauber gehören in die Feldzone — ein neuer ersetzt den alten.
+  Pendelmonster als Skala nur in die äußeren Zauber-/Fallenzonen.
+- **Positionen**: einmal pro Zug, nicht im Zug der Beschwörung; Link-
+  Monster nie in Verteidigung. Verdeckte Monster per **Flippbeschwörung**.
+- **Kampf**: nur in der eigenen Battle Phase, nicht im ersten Zug des
+  Duells, jedes Monster einmal; direkt nur, wenn der Gegner keine Monster
+  hat. Die **Schadensberechnung** läuft automatisch (zerstörte Monster in
+  den Friedhof ihres Besitzers, Kampfschaden auf die LP).
+- **Handlimit**: Wer mit mehr als 6 Karten den Zug beendet, wählt Karten
+  zum Abwerfen.
+
+> **Ehrliche Grenze:** Karteneffekte kennt die App nicht — ob eine Karte
+> „nicht als Normalbeschwörung“ gerufen werden darf, Materialien eines
+> bestimmten Typs braucht oder eine Ausnahme erlaubt, steht im Kartentext.
+> Deshalb gibt es im Modus *erzwingen* immer das „Trotzdem ausführen“.
+> Pendelbeschwörungen und Gegner-Monster in der Extra-Monsterzone werden
+> nicht simuliert, der Gegner spielt keine eigenen Züge. Fehlen Link-Pfeile
+> (Kartendaten älter als diese Version), weist das Protokoll darauf hin —
+> **Daten → Kartendaten aktualisieren…** lädt sie nach.
+
+## Gegner und Spielmarken
+
+- **Gegner-Karte…** sucht eine beliebige Karte und legt sie auf die
+  Gegnerseite (offen/verdeckt) — oder aktiviert sie **aus der Hand**
+  (Handtrap direkt in den Gegner-Friedhof, im Recorder als `Eff X (opp)`).
+  So spielst du Unterbrechungen wie Ash Blossom durch und hast Ziele für
+  Angriffe. Gegner-Karten lassen sich wie eigene verschieben, drehen,
+  zerstören (→ Gegner-Friedhof) oder entfernen; ihre Link-Pfeile stehen
+  aus deiner Sicht auf dem Kopf.
+- **Spielmarke…** erzeugt Spielmarken (Tokens) mit Name, Stufe, ATK/DEF —
+  für dich oder den Gegner. Verlassen sie das Feld, verschwinden sie.
+- **Gegnerseite zeigen** blendet die obere Hälfte aus, wenn du nur
+  goldfishen willst.
 
 ## Karten bewegen
 
 - **Linksklick** auf eine Karte (Hand oder Feld) nimmt sie auf (Gold-Rahmen),
   ein Klick auf eine freie Zone legt sie dort ab. Erneuter Klick auf die
   Karte legt sie zurück.
-- **Rechtsklick** öffnet das Kontextmenü: offen/verdeckt, ATK/DEF,
-  → Hand / Friedhof / Verbannt / Deck (oben), Details. Extra-Deck-Monster
-  gehen stattdessen **→ Extra-Deck** zurück (nie in Hand oder Main Deck).
-  Verdeckt/DEF gilt nur auf dem Feld und wird beim Verlassen zurückgesetzt.
+- Mit Regelwerk fragt ein kleines Menü beim Ablegen nach der Art:
+  **Normalbeschwörung / Setzen / Spezialbeschwörung (Effekt)** für Monster,
+  **Aktivieren / Setzen** für Zauber und Fallen, die Beschwörungsart für
+  Extra-Deck-Monster.
+- **Rechtsklick** öffnet das Kontextmenü: offen/verdeckt (mit Regeln:
+  Flippbeschwörung bzw. Aktivieren), ATK/DEF, **Angreifen…**,
+  **Xyz-Material abhängen…**, **Zählmarke ±1**, **Werte ändern…** (ATK/DEF/
+  Stufe durch Effekte — veränderte Werte erscheinen gold in der Werte-Leiste
+  und zählen im Kampf und bei Materialprüfungen), → Hand / Friedhof /
+  Verbannt / Deck (oben), Details. Extra-Deck-Monster gehen stattdessen
+  **→ Extra-Deck** zurück (nie in Hand oder Main Deck). Verdeckt/DEF,
+  Zählmarken und Werte-Änderungen gelten nur auf dem Feld und werden beim
+  Verlassen zurückgesetzt; Xyz-Material fällt dabei in den Friedhof.
 - **Klick auf das Deck** zieht eine Karte.
 
 ## Stapel (Deck / Extra / Friedhof / Verbannt)
@@ -237,8 +327,12 @@ Starthand** leert den Verlauf.
 ## Kombo aufzeichnen
 
 **● Aufzeichnen** protokolliert ab jetzt jeden Zug als Kombo-Schritt in
-Notation (`NS`/`SS`/`Act`/`Set`/`Add`/`Send`/`Mill`/…). Dabei gilt: die
-**erste** Beschwörung aus der Hand wird `NS`, alle weiteren `SS`; Karten,
+Notation (`NS`/`SS`/`Act`/`Set`/`Add`/`Send`/`Mill`/…). **Mit Regelwerk**
+steht die Beschwörungsart fest (`NS`, `Set`, `Flip`, `SS`) und Extra-Deck-
+Beschwörungen werden zu Formeln wie
+`Synchro: Soul (3) + Bone (4) -> Crimson Blade (7)`. **Ohne Regelwerk**
+gilt die Heuristik: die **erste** Beschwörung aus der Hand wird `NS`, alle
+weiteren `SS`; Karten,
 die du aus einem Stapel **aufnimmst** und ablegst, werden `SS <X> (ED/GY/…)`;
 das Aufdecken einer gesetzten Zauber/Falle wird `Act`. Drehst du eine eben
 abgelegte Karte gleich auf **verdeckt**, wird daraus `Set`. **Rückgängig**
@@ -254,8 +348,9 @@ sind auf die Kopien im Deck begrenzt.
 
 > Das Protokoll ist ein **Entwurf**: Es hält fest, *was sich bewegt hat* —
 > welcher **Effekt** eine Suche oder Beschwörung ausgelöst hat, weißt nur
-> du. Ergänze im Kombos-Tab die `Eff`-Ursachen und Synchro-Formeln; die
-> beratende Prüfung zeigt, wo noch etwas fehlt.
+> du. Ergänze im Kombos-Tab die `Eff`-Ursachen (ohne Regelwerk auch die
+> Synchro-Formeln); die beratende Prüfung zeigt, wo noch etwas fehlt.
+> Spielmarken und Gegner-Karten werden nie zu Bausteinen.
 """),
 
     ("Kombos-Tab", """\
