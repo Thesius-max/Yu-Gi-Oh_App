@@ -119,10 +119,12 @@ Hier steht dein **physischer Kartenbestand** — was du tatsächlich besitzt.
 - **Menge** ändern: Doppelklick auf die Mengen-Zelle.
 - **Kartenbild:** Maus über den Kartennamen zeigt eine Vorschau,
   **Doppelklick** auf die Zeile öffnet die Kartendetails (inkl. ✎ DE).
-- **Exportieren…** — speichert die Sammlung als lesbare Liste (`.txt`/`.pdf`)
-  oder als **Markdown für KI** (`.md`, jede Karte mit vollem Effekttext und
-  Menge). Sind Filter aktiv, wird nur die gefilterte Ansicht exportiert,
-  sonst die gesamte Sammlung.
+- **Exportieren…** — speichert die Sammlung als `.txt`, `.pdf`, Markdown
+  (`.md`) oder **CSV für Excel** (`.csv`, eine Zeile je Druck mit Menge,
+  Kartendaten, Set, Zustand, Sprache und Notizen). Die Sammlung wird
+  **immer ohne Effekttexte** exportiert — die gibt es nur beim Deck-Export.
+  Sind Filter aktiv, wird nur die gefilterte Ansicht exportiert, sonst die
+  gesamte Sammlung.
 - **Aktualisieren** — Liste neu laden.
 - **Ausgewählten Eintrag entfernen** — nimmt den markierten Bestand heraus.
 
@@ -165,10 +167,16 @@ Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
   ist der Passcode). Der Import erzwingt die 3-Kopien-Regel, sortiert
   Main/Extra korrekt und meldet unbekannte Passcodes im Bericht, statt
   abzubrechen.
-- **Exportieren…** schreibt das Deck wahlweise als `.ydk` (Passcodes), als
-  lesbare Liste (`.txt`/`.pdf`) oder als **Markdown für KI** (`.md`) — Letzteres
-  enthält jede Karte mit vollem Effekttext, Rolle, Konsistenz und Kombo-Linien,
-  damit ein KI-System das Deck ohne Nachschlagen beurteilen kann.
+- **Exportieren…** schreibt das Deck als `.ydk` (Passcodes, für YGOPro/
+  EDOPro) oder **vollständig** als `.txt`, `.pdf`, Markdown (`.md`) bzw.
+  **CSV für Excel** (`.csv`): jede Karte mit Menge, Typzeile, Archetyp,
+  vollem Effekttext, Kombo-Rolle und eigenen Rulings; `.txt`/`.pdf`/`.md`
+  enthalten zusätzlich Konsistenz und Kombo-Linien (die passen nicht in
+  eine Tabelle). So kann z. B. ein KI-System das Deck ohne Nachschlagen
+  beurteilen.
+- **CSV** ist für deutsches Excel/LibreOffice eingestellt (Semikolon,
+  UTF-8 mit BOM) und öffnet sich per Doppelklick mit korrekten Umlauten;
+  mehrzeilige Effekttexte stehen in einer Zelle.
 
 ## Korpus… (Referenz-Decks)
 
