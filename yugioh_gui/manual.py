@@ -53,33 +53,88 @@ Danach füllen sich Such-Filter und Listen automatisch.
 # Suche
 
 Der Suche-Tab hat drei Spalten (frei per Trennbalken verschiebbar):
-**Filter** links, **Trefferliste** in der Mitte, **Detailansicht** rechts.
+**Filter** links, **Treffertabelle** in der Mitte, **Detailansicht** rechts.
+Die Filter folgen dem **Aufbau einer Karte** — du suchst nach dem, was auf
+der Karte steht.
 
-## Suchen & filtern
+## Suchfeld
 
-- **Textfeld oben:** durchsucht **Name und Kartentext** (Volltext).
-- **Filter:** Typ, **Merkmal** (Empfänger, Flipp, Pendel, Ritual, Zwilling,
-  Spirit, Union, Toon, ohne Effekt, Extra Deck), Attribut, **Typ-Linie/Art**
-  (Drache, Unterweltler … bzw. bei Zaubern/Fallen Schnell, Permanent, Feld …),
-  Archetyp, Level/Rank, **Link-Wert**, ATK und
-  **DEF** von–bis. Jede Änderung löst sofort eine neue Suche aus.
+Oben links. Es findet
+- **Name und Kartentext** (deutsch oder englisch, der Wortanfang genügt),
+- die **Kartennummer** (Passcode unten links auf der Karte, z. B. `14558127`),
+- eine **Set-Nummer** (rechts unter dem Bild, z. B. `RA01-DE008` — deutsche
+  und englische Codes, Groß-/Kleinschreibung egal; auch deine eigenen
+  Drucke aus der Sammlung).
+
+## Kartenart
+
+Der Umschalter **Alle · Monster · Zauber · Falle** wählt die Kartenart.
+Darunter erscheinen nur die Filter, die für diese Art etwas bedeuten:
+
+- **Monster:**
+  - **Monsterart** = Rahmenfarbe: Normal, Effekt, Ritual, Fusion, Synchro,
+    Xyz, Pendel, Link. *Effekt* meint den orangen Rahmen — Synchro-Monster
+    mit Effekt findest du unter *Synchro*.
+  - **Eigenschaft** (LICHT, FINSTERNIS …) und **Merkmal** aus der Typzeile
+    (Empfänger, Flipp, Zwilling, Spirit, Union, Toon).
+  - **Typ** (Drache, Hexer …).
+  - Wertebereiche für **Stufe/Rang**, **Link**, **Pendelskala**, **ATK** und
+    **DEF**. „egal“ heißt kein Filter; `0` ist ein echter Wert (z. B. ATK 0).
+- **Zauber:** das Symbol — Normal, Schnell, Permanent, Ausrüstung, Feld,
+  Ritual.
+- **Falle:** das Symbol — Normal, Permanent, Konter.
+
+Die Filter-Knöpfe (**Chips**) schalten sich per Klick an und aus. Innerhalb
+einer Gruppe gilt **oder** (Synchro *oder* Xyz), zwischen den Gruppen
+**und** (Synchro *und* FINSTERNIS). Wechselst du die Kartenart, wirken die
+ausgeblendeten Filter nicht — zurück bei *Monster* sind sie wieder da.
+
+## Allgemein
+
+- **Archetyp:** auswählen oder eintippen (Vorschläge erscheinen beim
+  Tippen).
 - **Wortlaut:** filtert nach dem, was der Kartentext *tut* — z. B.
-  **Handtraps (heuristisch)** — genauer: Handeffekte im Gegnerzug (Monster, die einen Effekt aus der Hand als
-  Schnelleffekt oder im Zug des Gegners einsetzen, und Fallen, die aus der
-  Hand aktiviert werden dürfen — enthält alle klassischen Handtraps, aber
-  auch Karten, die nicht stören), Schnelleffekte, Auslöse-/Zünd-/Dauereffekte, „wählt Ziele“,
-  „annulliert“, hartes/weiches OPT, ohne OPT-Beschränkung, nicht
-  normalbeschwörbar, mit Lock. Grundlage ist dieselbe Heuristik wie bei
-  **Wortlaut ?** (englischer Kartentext); beim ersten Mal rechnet die App die
-  Merkmale einmalig vor (etwa eine Sekunde), nach einem Kartendaten-Update
-  erneut.
-- **„Nur meine Sammlung":** beschränkt die Treffer auf Karten, die du besitzt.
-- Die Trefferzahl steht unten links.
+  **Handtraps (heuristisch)** — genauer: Handeffekte im Gegnerzug (Monster,
+  die einen Effekt aus der Hand als Schnelleffekt oder im Zug des Gegners
+  einsetzen, und Fallen, die aus der Hand aktiviert werden dürfen — enthält
+  alle klassischen Handtraps, aber auch Karten, die nicht stören),
+  Schnelleffekte, Auslöse-/Zünd-/Dauereffekte, „wählt Ziele“, „annulliert“,
+  hartes/weiches OPT, ohne OPT-Beschränkung, nicht normalbeschwörbar, mit
+  Lock. Grundlage ist dieselbe Heuristik wie bei **Wortlaut ?** (englischer
+  Kartentext); beim ersten Mal rechnet die App die Merkmale einmalig vor
+  (etwa eine Sekunde), nach einem Kartendaten-Update erneut.
+- **„Nur meine Sammlung“:** nur Karten, die du besitzt.
+- **Filter zurücksetzen** stellt alles auf „egal“ (der Suchtext bleibt).
+
+Jede Änderung sucht sofort neu.
+
+## Treffertabelle
+
+- Der **Farbstreifen** links zeigt die Rahmenfarbe der Karte (Pendel:
+  oben die Monsterart, unten grün).
+- Spalten: **Name**, **Eigenschaft / Art** (z. B. `FINSTERNIS · Synchro`
+  oder `Zauber · Schnell`), **★** (Stufe, `R4` = Rang, `L2` = Link), **ATK**,
+  **DEF** und **Bestand** (deine Kopien).
+- Klick auf einen Spaltenkopf **sortiert** (nochmal: umgekehrt) — und zwar
+  **alle** Treffer, nicht nur die angezeigten: „ATK absteigend“ zeigt die
+  stärksten Monster überhaupt. Bei einer Textsuche stehen die besten Treffer
+  zuerst; ein neuer Suchtext stellt diese Reihenfolge wieder her.
+- Die Spalte **Bestand** zählt sofort mit, wenn du rechts Karten zur
+  Sammlung hinzufügst.
+- Angezeigt werden höchstens 300 Treffer; gibt es mehr, steht unten
+  „300+ Treffer – Suche eingrenzen“.
+- Maus über dem Namen zeigt den englischen Namen.
 
 ## Detailansicht (rechts)
 
-Zeigt Bild, Werte und Kartentext der gewählten Karte. Das Bild wird beim
-ersten Aufruf einmal lokal zwischengespeichert.
+Zeigt Bild, Kartendaten und Kartentext der gewählten Karte — in der
+Reihenfolge der Karte: **Eigenschaft** und **Stufe/Rang**, die **Typzeile**
+(z. B. `[Drache/Synchro/Effekt]`), **ATK/DEF** bzw. **ATK/LINK** mit den
+**Link-Pfeilen**, die **Pendelskala**, dann **Kartennummer**, in wie vielen
+**Sets** die Karte erschien und der **Archetyp**. Fehlen Typzeile oder
+Link-Pfeile (Kartendaten von vor diesem App-Stand), fragt die App beim Start
+einmal, ob sie die Kartendaten aktualisieren soll. Das Bild wird beim ersten
+Aufruf einmal lokal zwischengespeichert.
 
 - **✎ DE** — eigene **deutsche Übersetzung** für Name und/oder Kartentext
   hinterlegen. Der aktuelle Wert steht grau im Feld; leere Felder lassen die
