@@ -1,4 +1,4 @@
-"""Datei-Export-Helfer: Text woertlich als .txt/.md oder als PDF setzen.
+"""Datei-Export-Helfer: .txt/.md woertlich, .csv mit BOM, PDF im Monospace-Satz.
 
 Von Sammlungs- und Deck-Tab gemeinsam genutzt; QPdfWriter gehoert zu
 PySide6 (keine zusaetzliche Abhaengigkeit).
@@ -19,6 +19,13 @@ from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocume
 def write_text_file(path: str, text: str) -> None:
     """Text woertlich als UTF-8 mit Unix-Zeilenenden schreiben (.txt/.md)."""
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
+def write_csv_file(path: str, text: str) -> None:
+    """CSV fuer Excel schreiben: UTF-8 mit BOM (sonst zeigt Excel Umlaute
+    falsch); die Zeilenenden (CRLF) kommen schon vom csv-Writer."""
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
         fh.write(text)
 
 

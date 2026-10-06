@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
 import yugioh_db as ydb
 
 from .carddetail import CardDetailDialog
-from .exporting import resolve_export_path, write_text_file, write_text_pdf
+from .exporting import (
+    resolve_export_path, write_csv_file, write_text_file, write_text_pdf
+)
 from .images import HoverCardPreview, pos_over_item_text
 from .labels import ATTR_DE, CATEGORY_DE, CATEGORY_ORDER, COLLECTION_CARD_ID
 from .repository import CardRepository
@@ -364,9 +366,10 @@ class CollectionView(QWidget):
         )
 
     def _export(self) -> None:
-        """Sammlung exportieren -- lesbar (.txt/.pdf) oder als KI-tauglicher
-        Markdown-Block (.md). Beruecksichtigt die aktiven Filter; ohne Filter
-        ist es die gesamte Sammlung."""
+        """Sammlung exportieren -- als .txt/.pdf, Markdown (.md) oder CSV fuer
+        Excel (.csv), immer ohne Effekttexte (die gibt es nur im Deck-Export).
+        Beruecksichtigt die aktiven Filter; ohne Filter ist es die gesamte
+        Sammlung."""
         if not self.repo.exists():
             QMessageBox.warning(
                 self, "Export nicht möglich", "Keine Datenbank vorhanden."
@@ -375,13 +378,15 @@ class CollectionView(QWidget):
         suggested = "sammlung-gefiltert" if self._filters_active() else "sammlung"
         path, selected = QFileDialog.getSaveFileName(
             self, "Sammlung exportieren", suggested + ".txt",
-            "Textdatei (*.txt);;PDF-Datei (*.pdf);;Markdown für KI (*.md)",
+            "Textdatei (*.txt);;PDF-Datei (*.pdf);;Markdown (*.md);;"
+            "CSV für Excel (*.csv)",
         )
         if not path:
             return
         path, ext = resolve_export_path(
             path, selected,
-            {"Text": ".txt", "PDF": ".pdf", "Markdown": ".md"}, default_ext=".txt",
+            {"Text": ".txt", "PDF": ".pdf", "Markdown": ".md", "CSV": ".csv"},
+            default_ext=".txt",
         )
         kwargs = dict(
             text=self.filter_text.text(),
@@ -394,6 +399,10 @@ class CollectionView(QWidget):
             if ext == ".md":
                 write_text_file(
                     path, ydb.export_collection_markdown(self.repo.db_path, **kwargs)
+                )
+            elif ext == ".csv":
+                write_csv_file(
+                    path, ydb.export_collection_csv(self.repo.db_path, **kwargs)
                 )
             else:
                 text = ydb.export_collection_text(self.repo.db_path, **kwargs)

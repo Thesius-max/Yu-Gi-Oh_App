@@ -373,12 +373,15 @@ class DeckViewTests(_ViewTestCase):
         base = os.path.join(self._dir, "export")
         for selected, ext, check in (
             ("YGOPro-Deck (*.ydk)", ".ydk", lambda t: t.startswith("#created by")),
-            ("Textdatei (*.txt)", ".txt", lambda t: f"== Main Deck ({main}) ==" in t),
-            ("Markdown für KI (*.md)", ".md", lambda t: t.startswith("# Deck: RDA-Mitsu")),
+            ("Textdatei (*.txt)", ".txt",
+             lambda t: f"== Main Deck ({main}) ==" in t and "    Effekt: " in t),
+            ("Markdown (*.md)", ".md", lambda t: t.startswith("# Deck: RDA-Mitsu")),
+            ("CSV für Excel (*.csv)", ".csv",
+             lambda t: t.startswith("Zone;Anzahl;Name;") and "Effekttext" in t),
         ):
             self.ui.save_paths.append((base, selected))
             view._export_deck()
-            with open(base + ext, encoding="utf-8") as fh:
+            with open(base + ext, encoding="utf-8-sig" if ext == ".csv" else "utf-8") as fh:
                 self.assertTrue(check(fh.read()), ext)
             self.assertEqual(view.status.text(), f"Deck exportiert nach {base + ext}")
         self.ui.save_paths.append((base, "PDF-Datei (*.pdf)"))
@@ -526,8 +529,8 @@ class CollectionViewTests(_ViewTestCase):
         view = self.track(CollectionView(self.repo))
         view.filter_cat.setCurrentIndex(view.filter_cat.findData("trap"))
         base = os.path.join(self._dir, "sammlung")
-        for selected, ext in (("Textdatei (*.txt)", ".txt"), ("Markdown für KI (*.md)", ".md"),
-                              ("PDF-Datei (*.pdf)", ".pdf")):
+        for selected, ext in (("Textdatei (*.txt)", ".txt"), ("Markdown (*.md)", ".md"),
+                              ("PDF-Datei (*.pdf)", ".pdf"), ("CSV für Excel (*.csv)", ".csv")):
             self.ui.save_paths.append((base, selected))
             view._export()
             self.assertTrue(os.path.getsize(base + ext) > 0, ext)
@@ -536,6 +539,11 @@ class CollectionViewTests(_ViewTestCase):
             text = fh.read()
         self.assertTrue(text.startswith("Sammlung — Klasse=Falle\n"))
         self.assertNotIn("== Monster", text)
+        with open(base + ".csv", "rb") as fh:
+            raw = fh.read()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbfAnzahl;"))   # BOM fuer Excel
+        traps = len(ydb.list_collection(self.db, category="trap"))
+        self.assertEqual(raw.count(b"\r\n") - raw.count(b'"\r\n'), traps + 1)
 
     def test_detail_popup_and_hover_resolver(self):
         view = self.track(CollectionView(self.repo))

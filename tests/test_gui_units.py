@@ -218,6 +218,13 @@ class ExportHelperTests(QtTestCase):
         with open(path, "rb") as fh:
             self.assertEqual(fh.read(), "Zeile 1\nÄrger ✓\n".encode("utf-8"))
 
+    def test_write_csv_file_has_bom_and_keeps_crlf(self):
+        path = os.path.join(self._dir, "a.csv")
+        exporting.write_csv_file(path, "Name;Text\r\nÄrger;\"a\r\nb\"\r\n")
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), "\ufeffName;Text\r\nÄrger;\"a\r\nb\"\r\n"
+                             .encode("utf-8"))
+
     def test_write_text_pdf(self):
         path = os.path.join(self._dir, "a.pdf")
         exporting.write_text_pdf(path, ydb.export_deck_text(self.db, self.own_deck()))

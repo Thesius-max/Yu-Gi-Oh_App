@@ -4,7 +4,9 @@ Datenschicht: Text-/Markdown-Exporte fuer Sammlung, Deck und Kombo-Linien.
 
 from __future__ import annotations
 
+import csv
 import datetime
+import io
 import re
 import unittest
 
@@ -65,7 +67,7 @@ class LegacyExportTests(CardIdsTestCase):
         md = ydb.export_collection_markdown(self.db)
         self.assertIn("# Yu-Gi-Oh!-Sammlung", md)
         self.assertIn(f"### 3x {name}", md)
-        self.assertIn("- Effekt:", md)
+        self.assertNotIn("- Effekt:", md)         # Sammlung: nie Effekttexte
 
 
 class CollectionExportTests(CardIdsTestCase):
@@ -115,6 +117,37 @@ class CollectionExportTests(CardIdsTestCase):
         self.assertIn(f"## Zauber ({len(spells)})", md)
         self.assertNotIn("## Monster", md)
 
+    def test_markdown_has_no_effect_texts(self):
+        md = ydb.export_collection_markdown(self.db)
+        texts = self.query(
+            "SELECT DISTINCT COALESCE(c.desc_de, c.description) AS t FROM collection col "
+            "JOIN cards c ON c.id = col.card_id WHERE length(t) > 60 LIMIT 20")
+        self.assertTrue(texts)
+        for r in texts:
+            self.assertNotIn(r["t"][:60], md)
+        self.assertNotIn("- Effekt:", md)
+        self.assertIn("- Typ: ", md)
+
+    def test_collection_csv(self):
+        ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="LOB-001",
+                              condition="NM", notes="Binder; Seite 3\nunten")
+        data = ydb.export_collection_csv(self.db)
+        rows = list(csv.reader(io.StringIO(data, newline=""), delimiter=";"))
+        header, body = rows[0], rows[1:]
+        self.assertEqual(header[0], "Anzahl")
+        self.assertNotIn("Effekttext", header)
+        entries, _unique, total = ydb.collection_stats(self.db)
+        self.assertEqual(len(body), entries)
+        self.assertEqual(sum(int(r[0]) for r in body), total)
+        row = next(r for r in body if r[header.index("Set-Code")] == "LOB-001")
+        self.assertEqual(row[header.index("Notizen")], "Binder; Seite 3\nunten")
+        self.assertEqual(row[header.index("Passcode")], str(self.unowned_id))
+        self.assertEqual(row[header.index("Zustand")], "NM")
+        spells = ydb.export_collection_csv(self.db, category="spell")
+        spell_rows = list(csv.reader(io.StringIO(spells, newline=""), delimiter=";"))[1:]
+        self.assertEqual(len(spell_rows), len(ydb.list_collection(self.db, category="spell")))
+        self.assertTrue(all(r[header.index("Kartenklasse")] == "Zauber" for r in spell_rows))
+
     def test_empty_filter_result(self):
         text = ydb.export_collection_text(self.db, text="garantiert-kein-treffer")
         self.assertIn("0 Eintrag(e) · 0 verschiedene Karten · 0 Karten gesamt", text)
@@ -134,7 +167,51 @@ class DeckExportTests(CardIdsTestCase):
         ydb.add_card_to_deck(self.db, deck, self.main_ids(1)[0], zone="side")
         self.assertIn("== Side Deck (", ydb.export_deck_text(self.db, deck))  # ... bis belegt
         for r in ydb.deck_cards(self.db, deck, "main"):
-            self.assertIn(f"  {r['quantity']}x {r['name']}\n", text)
+            self.assertIn(f"\n{r['quantity']}x {r['name']}\n", text)
+
+    def test_deck_text_has_everything(self):
+        """Einzelnes Deck: Typzeile, Effekttext, Rolle, eigene Rulings und
+        Konsistenz/Kombo-Linien -- auch als .txt/.pdf."""
+        deck = self.own_deck()
+        cid = ydb.deck_cards(self.db, deck, "main")[0]["card_id"]
+        card = self.query("SELECT COALESCE(desc_de, description) AS t FROM cards "
+                          "WHERE id = ?", (cid,))[0]
+        self.seed_combo("Linie", {cid: "starter"})
+        ydb.add_card_ruling(self.db, cid, "Mein Ruling", "FAQ")
+        text = ydb.export_deck_text(self.db, deck)
+        first_line = card["t"].replace("\r\n", "\n").split("\n")[0]
+        self.assertIn(first_line, text)                       # Effekttext
+        self.assertIn("    Typ: ", text)
+        self.assertIn("    Rolle: Starter", text)
+        self.assertIn("    Ruling: Mein Ruling (Quelle: FAQ)", text)
+        self.assertIn("Konsistenz & Kombo-Linien", text)
+        self.assertIn("== Kombo-Linien (nach Abdeckung im Deck) ==", text)
+
+    def test_deck_csv(self):
+        deck = self.own_deck()
+        cid = ydb.deck_cards(self.db, deck, "main")[0]["card_id"]
+        ydb.add_card_ruling(self.db, cid, "R1\nzweite Zeile")
+        ydb.add_card_ruling(self.db, cid, "R2", "Quelle; mit Semikolon")
+        data = ydb.export_deck_csv(self.db, deck)
+        self.assertIn("\r\n", data)                           # Excel-Zeilenenden
+        rows = list(csv.reader(io.StringIO(data, newline=""), delimiter=";"))
+        header, body = rows[0], rows[1:]
+        self.assertEqual(header[:3], ["Zone", "Anzahl", "Name"])
+        self.assertEqual(header[-3:], ["Rolle", "Effekttext", "Rulings"])
+        self.assertTrue(all(len(r) == len(header) for r in body))
+        counts = ydb.deck_counts(self.db, deck)
+        for zone, label in (("main", "Main Deck"), ("extra", "Extra Deck")):
+            self.assertEqual(sum(int(r[1]) for r in body if r[0] == label), counts[zone])
+        row = next(r for r in body if r[header.index("Passcode")] == str(cid))
+        self.assertEqual(row[header.index("Rulings")],
+                         "R1\nzweite Zeile\nR2 (Quelle: Quelle; mit Semikolon)")
+        self.assertTrue(row[header.index("Effekttext")])
+        link = next((r for r in body if r[header.index("Link-Wert")]), None)
+        if link is not None:                                  # Link: keine Stufe/DEF
+            self.assertEqual((link[header.index("Stufe/Rang")],
+                              link[header.index("DEF")]), ("", ""))
+        with self.assertRaises(ValueError):
+            ydb.export_deck_csv(self.db, 999_999)
 
     def test_side_zone_listed(self):
         deck = ydb.create_deck(self.db, "T")

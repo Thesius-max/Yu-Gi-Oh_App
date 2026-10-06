@@ -233,10 +233,10 @@ class SearchDeckFlowTests(E2ETestCase):
         src = dv.deck_id
         base = os.path.join(self._dir, "RDA-Mitsu")
         for selected in ("YGOPro-Deck (*.ydk)", "Textdatei (*.txt)", "PDF-Datei (*.pdf)",
-                         "Markdown für KI (*.md)"):
+                         "Markdown (*.md)", "CSV für Excel (*.csv)"):
             self.ui.save_paths.append((base, selected))
             self.click(dv, "Exportieren…")
-        for ext in (".ydk", ".txt", ".pdf", ".md"):
+        for ext in (".ydk", ".txt", ".pdf", ".md", ".csv"):
             self.assertGreater(os.path.getsize(base + ext), 100, ext)
 
         self.ui.open_paths.append((base + ".ydk", ""))

@@ -1,14 +1,18 @@
-"""Text-/Markdown-Exporte fuer Sammlung, Decks und Kombo-Linien.
+"""Text-/Markdown-/CSV-Exporte fuer Sammlung, Decks und Kombo-Linien.
 
 Die Datenschicht erzeugt nur den fertigen Text; die GUI schreibt ihn als
-.txt/.md (woertlich) oder .pdf (Monospace-Satz). KI-Exporte sind Markdown
-mit vollem Kartentext, damit ein LLM Deck bzw. Sammlung ohne Nachschlagen
-beurteilen kann.
+.txt/.md (woertlich), .csv (mit BOM fuer Excel) oder .pdf (Monospace-Satz).
+Grundsatz (Benutzer-Vorgabe 2026-10-06): Die **Sammlung** wird immer ohne
+Effekttexte exportiert (Bestandsliste), ein **einzelnes Deck** immer mit
+allem -- Typzeile, Effekttext, Kombo-Rolle, eigene Rulings und (ausser in
+der CSV-Tabelle) Konsistenz und Kombo-Linien.
 """
 
 from __future__ import annotations
 
+import csv
 import datetime
+import io
 import re
 import sqlite3
 from typing import Optional
@@ -137,11 +141,6 @@ def export_deck_combos_text(db_path: str, deck_id: int) -> str:
 
 # -- Sammlungs-/Deck-Export (Text, PDF-Quelle, KI-Markdown) -----------------
 #
-# Die Datenschicht erzeugt nur den fertigen Text; die GUI schreibt ihn als
-# .txt/.md (woertlich) oder .pdf (Monospace-Satz). KI-Exporte sind Markdown
-# mit vollem Kartentext, damit ein LLM Deck bzw. Sammlung ohne Nachschlagen
-# beurteilen kann.
-
 _EXPORT_CATEGORY_DE = {
     "monster": "Monster", "spell": "Zauber",
     "trap": "Falle", "other": "Sonstige",
@@ -177,8 +176,9 @@ def _card_details(db_path: str, card_ids: list[int]) -> dict[int, sqlite3.Row]:
     ph = ",".join("?" * len(card_ids))
     with _conn(db_path) as conn:
         rows = conn.execute(
-            f"""SELECT id, COALESCE(name_de, name) AS name, type, race,
-                       attribute, atk, def, level, link_value, archetype,
+            f"""SELECT id, COALESCE(name_de, name) AS name, name AS name_en,
+                       type, frame_type, race, attribute, atk, def, level,
+                       link_value, archetype,
                        COALESCE(desc_de, description) AS text
                 FROM cards WHERE id IN ({ph})""",
             card_ids,
@@ -225,11 +225,11 @@ def _md_fence(content: str) -> str:
 
 def _card_md_block(
     d: Optional[sqlite3.Row], lead: str, roles: Optional[list[str]] = None,
-    rulings: Optional[list[sqlite3.Row]] = None,
+    rulings: Optional[list[sqlite3.Row]] = None, with_text: bool = True,
 ) -> list[str]:
     """Markdown-Block einer Karte: Ueberschrift (lead = z.B. '3x '), Typzeile,
     optional Archetyp/Rolle, der volle Effekttext (eingerueckt) und eigene
-    Rulings."""
+    Rulings. with_text=False (Sammlung): nur Typzeile/Archetyp."""
     if d is None:
         return [f"### {lead}(unbekannte Karte)", ""]
     block = [f"### {lead}{_md_inline(d['name'])}", f"- Typ: {_card_meta_line(d)}"]
@@ -237,6 +237,9 @@ def _card_md_block(
         block.append(f"- Archetyp: {d['archetype']}")
     if roles:
         block.append("- Rolle: " + ", ".join(ROLE_LABEL.get(r, r) for r in roles))
+    if not with_text:
+        block.append("")
+        return block
     txt = (d["text"] or "").strip()
     if txt:
         indented = txt.replace("\r\n", "\n").replace("\r", "\n").replace(
@@ -251,6 +254,70 @@ def _card_md_block(
         block.append(f"- Ruling: {text}{src}")
     block.append("")
     return block
+
+
+def _indent(text: str, prefix: str) -> str:
+    """Mehrzeiligen Text einruecken (Folgezeilen mit 'prefix')."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\n" + prefix)
+
+
+def _card_text_block(
+    d: Optional[sqlite3.Row], lead: str, roles: Optional[list[str]] = None,
+    rulings: Optional[list[sqlite3.Row]] = None,
+) -> list[str]:
+    """Text-Pendant zu _card_md_block fuer den vollstaendigen Deck-Export
+    (.txt/.pdf): Name, Typzeile, Archetyp, Rolle, Effekttext, Rulings."""
+    if d is None:
+        return [f"{lead}(unbekannte Karte)", ""]
+    block = [f"{lead}{d['name']}", f"    Typ: {_card_meta_line(d)}"]
+    if d["archetype"]:
+        block.append(f"    Archetyp: {d['archetype']}")
+    if roles:
+        block.append("    Rolle: " + ", ".join(ROLE_LABEL.get(r, r) for r in roles))
+    txt = (d["text"] or "").strip()
+    block.append("    Effekt: " + (_indent(txt, "      ") if txt
+                                     else "(kein Kartentext vorhanden)"))
+    for r in rulings or ():
+        src = f" (Quelle: {r['source']})" if r["source"] else ""
+        block.append(f"    Ruling: {_indent(r['text'], '      ')}{src}")
+    block.append("")
+    return block
+
+
+# CSV fuer deutsches Excel: Semikolon, CRLF; das BOM setzt die GUI beim
+# Schreiben (utf-8-sig). Zeilenumbrueche in Zellen quotet der csv-Writer.
+_CARD_COLUMNS = (
+    "Name", "Name (EN)", "Passcode", "Kartenklasse", "Typ", "Attribut",
+    "Typ-Linie/Art", "Stufe/Rang", "Link-Wert", "ATK", "DEF", "Archetyp",
+)
+
+
+def _card_csv_cells(cid: int, d: Optional[sqlite3.Row]) -> list:
+    if d is None:
+        return ["(unbekannte Karte)", "", cid] + [""] * (len(_CARD_COLUMNS) - 3)
+    is_monster = card_category(d["type"]) == "monster"
+
+    def num(v):
+        return "" if v is None else v
+    return [
+        d["name"], d["name_en"], cid,
+        _EXPORT_CATEGORY_DE.get(card_category(d["type"]), ""),
+        d["type"] or "", d["attribute"] or "", d["race"] or "",
+        num(d["level"]) if is_monster and d["link_value"] is None else "",
+        num(d["link_value"]),
+        num(d["atk"]) if is_monster else "",
+        num(d["def"]) if is_monster and d["link_value"] is None else "",
+        d["archetype"] or "",
+    ]
+
+
+def _to_csv(header, rows) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";", lineterminator="\r\n",
+                        quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(header)
+    writer.writerows(rows)
+    return buf.getvalue()
 
 
 def export_collection_text(
@@ -303,10 +370,9 @@ def export_collection_markdown(
     attribute: Optional[str] = None, archetype: Optional[str] = None,
     untranslated_only: bool = False,
 ) -> str:
-    """Sammlung als KI-tauglicher Markdown-Block: je Karte ein Eintrag mit
-    Typ, Attribut und vollem Effekttext (DE bevorzugt) plus Gesamtmenge --
-    damit ein KI-System Decks aus dem Bestand vorschlagen kann, ohne Karten
-    nachzuschlagen. Gleiche Filter wie die Sammlungs-Ansicht."""
+    """Sammlung als Markdown-Bestandsliste: je Karte Gesamtmenge, Typzeile
+    und Archetyp -- bewusst **ohne Effekttext** (Effekttexte gibt es nur im
+    Deck-Export). Gleiche Filter wie die Sammlungs-Ansicht."""
     rows = list_collection(
         db_path, text, category, attribute, archetype,
         untranslated_only=untranslated_only,
@@ -328,8 +394,8 @@ def export_collection_markdown(
         f"Stand: {datetime.date.today().strftime('%d.%m.%Y')} · "
         f"{len(order)} verschiedene Karten · {sum(qty.values())} gesamt",
         "",
-        "Jede Karte mit vollem Effekttext und besessener Menge. Nutzbar, um "
-        "eine KI Decks aus diesem Bestand vorschlagen zu lassen.",
+        "Bestandsliste: jede Karte mit besessener Menge, Typ und Archetyp "
+        "(ohne Effekttexte).",
     ]
     by_cat: dict[str, list[int]] = {}
     for cid in order:
@@ -341,55 +407,115 @@ def export_collection_markdown(
             continue
         lines += ["", f"## {_EXPORT_CATEGORY_DE[cat]} ({len(cids)})", ""]
         for cid in cids:
-            lines += _card_md_block(details.get(cid), f"{qty[cid]}x ")
+            lines += _card_md_block(details.get(cid), f"{qty[cid]}x ",
+                                    with_text=False)
     return "\n".join(lines) + "\n"
 
 
-def export_deck_text(db_path: str, deck_id: int) -> str:
-    """Deck als lesbare Liste je Zone (Main/Extra/Side) mit Mengen --
-    menschenlesbare Ergaenzung zum technischen .ydk."""
+def export_collection_csv(
+    db_path: str, text: Optional[str] = None, category: Optional[str] = None,
+    attribute: Optional[str] = None, archetype: Optional[str] = None,
+    untranslated_only: bool = False,
+) -> str:
+    """Sammlung als CSV (Semikolon, fuer Excel): eine Zeile je Eintrag
+    (Druck) mit Menge, Kartendaten und Druck-Angaben -- ohne Effekttext.
+    Gleiche Filter wie die Sammlungs-Ansicht."""
+    rows = list_collection(
+        db_path, text, category, attribute, archetype,
+        untranslated_only=untranslated_only,
+    )
+    details = _card_details(db_path, sorted({r["card_id"] for r in rows}))
+    header = ("Anzahl",) + _CARD_COLUMNS + (
+        "Set-Code", "Edition", "Zustand", "Sprache", "Notizen")
+    return _to_csv(header, [
+        [r["quantity"]] + _card_csv_cells(r["card_id"], details.get(r["card_id"]))
+        + [r[k] or "" for k in ("set_code", "edition", "condition", "language", "notes")]
+        for r in rows
+    ])
+
+
+def _deck_name(db_path: str, deck_id: int) -> str:
     with _conn(db_path) as conn:
         deck = conn.execute(
             "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
         ).fetchone()
     if deck is None:
         raise ValueError(f"Deck {deck_id} nicht gefunden.")
+    return deck["name"]
+
+
+def _deck_role_map(db_path: str, deck_id: int) -> dict[int, list[str]]:
+    """{card_id: [Rollen]} aus den Kombos (Reihenfolge wie COMBO_ROLES)."""
+    role_map: dict[int, list[str]] = {}
+    for role, cards in deck_role_summary(db_path, deck_id).items():
+        for c in cards:
+            role_map.setdefault(c["card_id"], []).append(role)
+    return {cid: sorted(rs, key=COMBO_ROLES.index) for cid, rs in role_map.items()}
+
+
+_DECK_ZONES = (("main", "Main Deck"), ("extra", "Extra Deck"), ("side", "Side Deck"))
+
+
+def export_deck_text(db_path: str, deck_id: int) -> str:
+    """Deck vollstaendig als lesbarer Text (.txt/.pdf): je Zone jede Karte
+    mit Menge, Typzeile, Archetyp, Kombo-Rolle, Effekttext und eigenen
+    Rulings, danach Konsistenz und Kombo-Linien."""
     out = [
-        f"Deck: {deck['name']}",
+        f"Deck: {_deck_name(db_path, deck_id)}",
         f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}",
     ]
-    for zone, label in (
-        ("main", "Main Deck"), ("extra", "Extra Deck"), ("side", "Side Deck"),
-    ):
+    role_map = _deck_role_map(db_path, deck_id)
+    for zone, label in _DECK_ZONES:
         rows = deck_cards(db_path, deck_id, zone)
         if not rows:
             continue
         details = _card_details(db_path, [r["card_id"] for r in rows])
         total = sum(r["quantity"] for r in rows)
-        out += ["", f"== {label} ({total}) =="]
+        out += ["", f"== {label} ({total}) ==", ""]
+        for r in rows:
+            out += _card_text_block(
+                details.get(r["card_id"]), f"{r['quantity']}x ",
+                role_map.get(r["card_id"]),
+                list_card_rulings(db_path, r["card_id"]),
+            )
+    out += ["", "=" * 60, "Konsistenz & Kombo-Linien", "=" * 60, "",
+            export_deck_combos_text(db_path, deck_id).rstrip("\n")]
+    return "\n".join(out) + "\n"
+
+
+def export_deck_csv(db_path: str, deck_id: int) -> str:
+    """Deck vollstaendig als CSV (Semikolon, fuer Excel): eine Zeile je
+    Karte und Zone mit Kartendaten, Kombo-Rolle, Effekttext und eigenen
+    Rulings. Kombo-Linien passen in keine Tabelle (siehe .txt/.md)."""
+    _deck_name(db_path, deck_id)                  # unbekanntes Deck -> Fehler
+    role_map = _deck_role_map(db_path, deck_id)
+    header = ("Zone", "Anzahl") + _CARD_COLUMNS + ("Rolle", "Effekttext", "Rulings")
+    out_rows = []
+    for zone, label in _DECK_ZONES:
+        rows = deck_cards(db_path, deck_id, zone)
+        details = _card_details(db_path, [r["card_id"] for r in rows])
         for r in rows:
             d = details.get(r["card_id"])
-            name = d["name"] if d else r["name"]
-            out.append(f"  {r['quantity']}x {name}")
-    return "\n".join(out) + "\n"
+            rulings = "\n".join(
+                x["text"] + (f" (Quelle: {x['source']})" if x["source"] else "")
+                for x in list_card_rulings(db_path, r["card_id"])
+            )
+            out_rows.append(
+                [label, r["quantity"]] + _card_csv_cells(r["card_id"], d)
+                + [", ".join(ROLE_LABEL.get(x, x) for x in role_map.get(r["card_id"], [])),
+                   (d["text"] or "").strip() if d else "", rulings]
+            )
+    return _to_csv(header, out_rows)
 
 
 def export_deck_markdown(db_path: str, deck_id: int) -> str:
     """Deck als KI-tauglicher Markdown-Block: alle Karten je Zone mit vollem
     Effekttext und (sofern erfasst) Kombo-Rolle, gefolgt von Konsistenz und
     Kombo-Linien -- damit eine KI das Deck ohne Nachschlagen analysiert."""
-    with _conn(db_path) as conn:
-        deck = conn.execute(
-            "SELECT name FROM decks WHERE deck_id = ?", (deck_id,)
-        ).fetchone()
-    if deck is None:
-        raise ValueError(f"Deck {deck_id} nicht gefunden.")
-    role_map: dict[int, list[str]] = {}
-    for role, cards in deck_role_summary(db_path, deck_id).items():
-        for c in cards:
-            role_map.setdefault(c["card_id"], []).append(role)
+    name = _deck_name(db_path, deck_id)
+    role_map = _deck_role_map(db_path, deck_id)
     lines = [
-        f"# Deck: {deck['name']}",
+        f"# Deck: {name}",
         "",
         f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}",
     ]
@@ -403,9 +529,9 @@ def export_deck_markdown(db_path: str, deck_id: int) -> str:
         total = sum(r["quantity"] for r in rows)
         lines += ["", f"## {label} ({total})", ""]
         for r in rows:
-            roles = sorted(role_map.get(r["card_id"], []), key=COMBO_ROLES.index)
             lines += _card_md_block(
-                details.get(r["card_id"]), f"{r['quantity']}x ", roles or None,
+                details.get(r["card_id"]), f"{r['quantity']}x ",
+                role_map.get(r["card_id"]),
                 list_card_rulings(db_path, r["card_id"]),
             )
     # Konsistenz + Kombo-Linien aus der bestehenden Funktion (eine Quelle der

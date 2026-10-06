@@ -23,7 +23,9 @@ from .carddetail import CardDetailDialog, CardSearchDialog
 from .deck_dialogs import (
     ComboFromDeckDialog, DeckCorpusDiffDialog, ReferenceDeckDialog
 )
-from .exporting import resolve_export_path, write_text_file, write_text_pdf
+from .exporting import (
+    resolve_export_path, write_csv_file, write_text_file, write_text_pdf
+)
 from .images import HoverCardPreview, pos_over_item_text
 from .labels import (
     CATEGORY_DE, CATEGORY_ORDER, ROLE_DE, SIM_COPIES_DATA, ZONE_LABELS,
@@ -449,21 +451,23 @@ class DeckView(QWidget):
             self.status.setText(lines[0] + "  " + self.status.text())
 
     def _export_deck(self) -> None:
-        """Deck als .ydk (Passcodes), lesbare Liste (.txt/.pdf) oder als
-        KI-tauglicher Markdown-Block (.md) exportieren."""
+        """Deck als .ydk (Passcodes) oder vollstaendig -- mit Effekttexten,
+        Rollen und Rulings -- als .txt/.pdf, Markdown (.md) oder CSV fuer
+        Excel (.csv) exportieren."""
         if self.deck_id is None:
             return
         suggested = self.deck_cb.currentText().strip() or "deck"
         path, selected = QFileDialog.getSaveFileName(
             self, "Deck exportieren", suggested + ".ydk",
             "YGOPro-Deck (*.ydk);;Textdatei (*.txt);;PDF-Datei (*.pdf);;"
-            "Markdown für KI (*.md)",
+            "Markdown (*.md);;CSV für Excel (*.csv)",
         )
         if not path:
             return
         path, ext = resolve_export_path(
             path, selected,
-            {"YGOPro": ".ydk", "Text": ".txt", "PDF": ".pdf", "Markdown": ".md"},
+            {"YGOPro": ".ydk", "Text": ".txt", "PDF": ".pdf", "Markdown": ".md",
+             "CSV": ".csv"},
             default_ext=".ydk",
         )
         db, did = self.repo.db_path, self.deck_id
@@ -472,6 +476,8 @@ class DeckView(QWidget):
                 write_text_file(path, ydb.export_deck_ydk(db, did))
             elif ext == ".md":
                 write_text_file(path, ydb.export_deck_markdown(db, did))
+            elif ext == ".csv":
+                write_csv_file(path, ydb.export_deck_csv(db, did))
             elif ext == ".pdf":
                 write_text_pdf(path, ydb.export_deck_text(db, did))
             else:
