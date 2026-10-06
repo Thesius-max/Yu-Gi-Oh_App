@@ -1,11 +1,18 @@
-"""Bestand (Sammlung): Eintraege, Filter, Statistiken.
+"""Bestand (Sammlung): Eintraege, Filter, Statistiken, Set-Auswahl.
 
-Identische Drucke werden zusammengefuehrt statt dupliziert
-(add_to_collection, NULL-sicherer Abgleich per IS).
+Gespeichert wird **je Druck** (Karte + Set/Edition/Zustand/Sprache);
+identische Drucke werden zusammengefuehrt statt dupliziert
+(add_to_collection und update_collection_print, NULL-sicherer Abgleich per
+IS). Angezeigt und exportiert wird **je Karte** (list_collection_cards):
+eine Karte ist eine Zeile, die Drucke schluesseln nur die Menge auf
+(prints_summary). Set-Codes kennt die API nur englisch; localize_set_code
+schreibt sie fuer deutsche Drucke um (RA01-EN008 -> RA01-DE008).
 """
 
 from __future__ import annotations
 
+import html
+import re
 import sqlite3
 from typing import Optional
 
@@ -52,6 +59,87 @@ def add_to_collection(
             entry_id = cur.lastrowid
         conn.commit()
         return entry_id
+
+
+# Sprachen eines Drucks (collection.language): Schluessel -> Anzeige.
+PRINT_LANGUAGES = (("DE", "Deutsch"), ("EN", "Englisch"))
+_REGION = {"DE": ("DE", "G"), "EN": ("EN", "E")}   # neuer / alter EU-Code
+_CODE_RE = re.compile(r"^([A-Z0-9]+)-(EN|DE|E|G)(?=\d|[A-Z]\d)", re.I)
+
+
+def localize_set_code(code: Optional[str], language: Optional[str]) -> Optional[str]:
+    """Set-Code in die Region einer Sprache umschreiben: 'DE' macht aus
+    RA01-EN008 -> RA01-DE008 und aus dem alten EU-Code PSV-E088 -> PSV-G088,
+    'EN' umgekehrt. Codes ohne Regionskennung (PSV-088) und unbekannte
+    Sprachen bleiben unveraendert."""
+    if not code or language not in _REGION:
+        return code
+    m = _CODE_RE.match(code)
+    if not m:
+        return code
+    region = m.group(2).upper()
+    new = _REGION[language][0] if region in ("EN", "DE") else _REGION[language][1]
+    return f"{m.group(1)}-{new}{code[m.end():]}"
+
+
+def card_set_choices(db_path: str, card_id: int) -> list[dict]:
+    """Bekannte Sets einer Karte als [{'code', 'name'}] -- je Set-Code
+    einmal (Seltenheiten zusammengefasst), nach Set-Name sortiert. Namen
+    werden entschaerft (aeltere Kartendaten enthalten noch '&apos;')."""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT set_code, MIN(set_name) AS set_name FROM card_sets "
+            "WHERE card_id = ? AND set_code IS NOT NULL AND set_code != '' "
+            "GROUP BY set_code",
+            (card_id,),
+        ).fetchall()
+    out = [{"code": r["set_code"], "name": html.unescape(r["set_name"] or "")}
+           for r in rows]
+    out.sort(key=lambda s: (s["name"].casefold(), s["code"]))
+    return out
+
+
+def update_collection_print(
+    db_path: str, entry_id: int, set_code: Optional[str],
+    language: Optional[str],
+) -> int:
+    """Set und Sprache eines Sammlungseintrags aendern. Entsteht dadurch ein
+    Druck, den es schon gibt (Karte, Set, Edition, Zustand, Sprache gleich),
+    werden die Eintraege zusammengefuehrt: Mengen addiert, Notizen
+    verbunden, der geaenderte Eintrag geloescht. Rueckgabe: die entry_id des
+    verbleibenden Eintrags."""
+    set_code = (set_code or "").strip() or None
+    language = (language or "").strip() or None
+    with _conn(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM collection WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+        if cur is None:
+            raise ValueError(f"Sammlungseintrag {entry_id} nicht gefunden.")
+        twin = conn.execute(
+            """SELECT entry_id, quantity, notes FROM collection
+               WHERE card_id = ? AND set_code IS ? AND edition IS ?
+                 AND condition IS ? AND language IS ? AND entry_id != ?""",
+            (cur["card_id"], set_code, cur["edition"], cur["condition"],
+             language, entry_id),
+        ).fetchone()
+        if twin is None:
+            conn.execute(
+                "UPDATE collection SET set_code = ?, language = ? WHERE entry_id = ?",
+                (set_code, language, entry_id),
+            )
+            result = entry_id
+        else:
+            notes = "; ".join(n for n in (twin["notes"], cur["notes"])
+                              if n and n.strip()) or None
+            conn.execute(
+                "UPDATE collection SET quantity = ?, notes = ? WHERE entry_id = ?",
+                (twin["quantity"] + cur["quantity"], notes, twin["entry_id"]),
+            )
+            conn.execute("DELETE FROM collection WHERE entry_id = ?", (entry_id,))
+            result = twin["entry_id"]
+        conn.commit()
+        return result
 
 
 def list_collection(
@@ -129,6 +217,57 @@ def set_collection_quantity(db_path: str, entry_id: int, quantity: int) -> None:
                 "UPDATE collection SET quantity = ? WHERE entry_id = ?",
                 (quantity, entry_id),
             )
+        conn.commit()
+
+
+def list_collection_cards(
+    db_path: str,
+    text: Optional[str] = None,
+    category: Optional[str] = None,
+    attribute: Optional[str] = None,
+    archetype: Optional[str] = None,
+    untranslated_only: bool = False,
+) -> list[dict]:
+    """Bestand **je Karte** (gleiche Filter wie list_collection): eine
+    Karte ist ein Eintrag mit Gesamtmenge; 'prints' enthaelt die einzelnen
+    Drucke (Bestandseintraege). Reihenfolge wie list_collection (Name)."""
+    cards: dict[int, dict] = {}
+    for r in list_collection(db_path, text, category, attribute, archetype,
+                             untranslated_only=untranslated_only):
+        card = cards.get(r["card_id"])
+        if card is None:
+            card = cards[r["card_id"]] = {
+                "card_id": r["card_id"], "name": r["name"],
+                "name_de": r["name_de"], "type": r["type"],
+                "attribute": r["attribute"], "archetype": r["archetype"],
+                "quantity": 0, "prints": [],
+            }
+        card["quantity"] += r["quantity"]
+        card["prints"].append(r)
+    return list(cards.values())
+
+
+def print_label(entry) -> str:
+    """Kurzbezeichnung eines Drucks: 'RA01-DE008 (DE, 1st, NM)' bzw.
+    'ohne Set'."""
+    details = [entry[k] for k in ("language", "edition", "condition") if entry[k]]
+    label = entry["set_code"] or "ohne Set"
+    return label + (f" ({', '.join(details)})" if details else "")
+
+
+def prints_summary(prints) -> str:
+    """Aufschluesselung der Menge nach Drucken, z. B.
+    '2× RA01-DE008 (DE) · 3× ohne Set'. Leer, wenn es nur einen Druck ohne
+    jede Angabe gibt (dann sagt die Menge schon alles)."""
+    if len(prints) == 1 and print_label(prints[0]) == "ohne Set":
+        return ""
+    return " · ".join(f"{p['quantity']}× {print_label(p)}" for p in prints)
+
+
+def remove_collection_card(db_path: str, card_id: int) -> None:
+    """Entfernt alle Drucke einer Karte aus dem Bestand."""
+    with _conn(db_path) as conn:
+        conn.execute("DELETE FROM collection WHERE card_id = ?", (card_id,))
         conn.commit()
 
 

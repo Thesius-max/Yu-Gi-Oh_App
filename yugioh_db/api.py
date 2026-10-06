@@ -197,7 +197,7 @@ def build_database(
                        VALUES (?,?,?,?)""",
                     (
                         c.get("id"),
-                        s.get("set_name"),
+                        _unescape(s.get("set_name")),
                         s.get("set_code"),
                         s.get("set_rarity"),
                     ),

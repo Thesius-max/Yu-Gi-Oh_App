@@ -21,7 +21,8 @@ import yugioh_db as ydb
 
 from .carddetail import CardDetailDialog, CardSearchDialog
 from .deck_dialogs import (
-    ComboFromDeckDialog, DeckCorpusDiffDialog, ReferenceDeckDialog
+    ComboFromDeckDialog, DeckCorpusDiffDialog, ReferenceDeckDialog,
+    ShoppingListDialog,
 )
 from .exporting import (
     resolve_export_path, write_csv_file, write_text_file, write_text_pdf
@@ -195,6 +196,10 @@ class DeckView(QWidget):
             "(was fehlt dir, was hast du extra)"
         )
         diff_btn.clicked.connect(self._open_corpus_diff)
+        shop_btn = QPushButton("Einkaufsliste…")
+        shop_btn.setToolTip(
+            "Fehlende Karten über alle eigenen Decks zusammen (mit Export)")
+        shop_btn.clicked.connect(self._open_shopping_list)
         top.addWidget(QLabel("Deck:"))
         top.addWidget(self.deck_cb, stretch=1)
         top.addWidget(new_btn)
@@ -203,6 +208,7 @@ class DeckView(QWidget):
         top.addWidget(export_btn)
         top.addWidget(corpus_btn)
         top.addWidget(diff_btn)
+        top.addWidget(shop_btn)
         layout.addLayout(top)
 
         zones_widget = QWidget()
@@ -384,6 +390,14 @@ class DeckView(QWidget):
             return
         ReferenceDeckDialog(self.repo, self).exec()
         self.refresh()  # Korpus speist Vorschlaege und Vergleich
+
+    def _open_shopping_list(self) -> None:
+        """Fehlende Karten ueber alle eigenen Decks (Bestand vs. Bedarf)."""
+        if not self.repo.exists():
+            return
+        dlg = ShoppingListDialog(self.repo, self)
+        dlg.exec()
+        dlg.deleteLater()
 
     def _open_corpus_diff(self) -> None:
         """Aktuelles Deck gegen eine Korpus-/Referenz-Liste vergleichen."""

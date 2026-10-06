@@ -178,5 +178,93 @@ class CollectionFilterTests(CardIdsTestCase):
         self.assertEqual(names, sorted(names))
 
 
+class PrintTests(CardIdsTestCase):
+    def test_localize_set_code(self):
+        loc = ydb.localize_set_code
+        self.assertEqual(loc("RA01-EN008", "DE"), "RA01-DE008")
+        self.assertEqual(loc("RA01-DE008", "EN"), "RA01-EN008")
+        self.assertEqual(loc("L5DD-ENC09", "DE"), "L5DD-DEC09")
+        self.assertEqual(loc("PSV-E088", "DE"), "PSV-G088")         # alter EU-Code
+        self.assertEqual(loc("PSV-G088", "EN"), "PSV-E088")
+        self.assertEqual(loc("PSV-088", "DE"), "PSV-088")           # ohne Region
+        self.assertEqual(loc("RA01-EN008", None), "RA01-EN008")
+        self.assertIsNone(loc(None, "DE"))
+
+    def test_card_set_choices(self):
+        choices = ydb.card_set_choices(self.db, 14558127)
+        codes = [c["code"] for c in choices]
+        self.assertEqual(len(codes), len(set(codes)))
+        self.assertEqual(len(codes), self.scalar(
+            "SELECT COUNT(DISTINCT set_code) FROM card_sets WHERE card_id = ?", (14558127,)))
+        self.assertIn("RA01-EN008", codes)
+        names = [c["name"].casefold() for c in choices]
+        self.assertEqual(names, sorted(names))
+        self.assertFalse(any("&" in c["name"] and ";" in c["name"] for c in choices))
+        tricky = self.scalar("SELECT card_id FROM card_sets WHERE set_name LIKE '%&apos;%' LIMIT 1")
+        if tricky is not None:                                       # alte Kartendaten
+            self.assertFalse(any("&apos;" in c["name"]
+                                 for c in ydb.card_set_choices(self.db, tricky)))
+        self.assertEqual(ydb.card_set_choices(self.db, 999_999_999), [])
+
+    def test_update_print_and_merge(self):
+        cid = self.unowned_id
+        a = ydb.add_to_collection(self.db, cid, 2, notes="Binder")
+        b = ydb.add_to_collection(self.db, cid, 1, set_code="RA01-DE008", language="DE",
+                                  notes="Deck-Box")
+        self.assertEqual(ydb.update_collection_print(self.db, a, "LOB-DE001", "DE"), a)
+        row = self.query("SELECT set_code, language, quantity FROM collection "
+                         "WHERE entry_id = ?", (a,))[0]
+        self.assertEqual(tuple(row), ("LOB-DE001", "DE", 2))
+        kept = ydb.update_collection_print(self.db, a, " RA01-DE008 ", "DE")
+        self.assertEqual(kept, b)                                    # zusammengefuehrt
+        self.assertIsNone(self.scalar("SELECT 1 FROM collection WHERE entry_id = ?", (a,)))
+        row = self.query("SELECT quantity, notes FROM collection WHERE entry_id = ?", (b,))[0]
+        self.assertEqual(tuple(row), (3, "Deck-Box; Binder"))
+        self.assertEqual(ydb.update_collection_print(self.db, b, "", ""), b)
+        self.assertEqual(tuple(self.query("SELECT set_code, language FROM collection "
+                                          "WHERE entry_id = ?", (b,))[0]), (None, None))
+        with self.assertRaises(ValueError):
+            ydb.update_collection_print(self.db, 999_999, "X", None)
+
+
+class PerCardTests(CardIdsTestCase):
+    def test_list_collection_cards_groups_prints(self):
+        cid = self.unowned_id
+        ydb.add_to_collection(self.db, cid, 2, set_code="RA01-DE008", language="DE")
+        ydb.add_to_collection(self.db, cid, 1, set_code="MP22-EN257", language="EN")
+        cards = ydb.list_collection_cards(self.db)
+        self.assertEqual(len(cards), self.scalar(
+            "SELECT COUNT(DISTINCT card_id) FROM collection"))
+        card = next(c for c in cards if c["card_id"] == cid)
+        self.assertEqual((card["quantity"], len(card["prints"])), (3, 2))
+        self.assertEqual(ydb.prints_summary(card["prints"]),
+                         "2× RA01-DE008 (DE) · 1× MP22-EN257 (EN)")
+        names = [(c["name_de"] or c["name"]).casefold() for c in cards]
+        self.assertEqual(sum(card["quantity"] for card in cards),
+                         ydb.collection_stats(self.db)[2])
+        filtered = ydb.list_collection_cards(self.db, text=self.display_name(cid))
+        self.assertIn(cid, [c["card_id"] for c in filtered])
+        self.assertTrue(names)
+
+    def test_prints_summary_and_label(self):
+        single = ydb.list_collection(self.db)[:1]
+        self.assertEqual(ydb.prints_summary(single), "")          # nur Menge, kein Set
+        cid = self.unowned_id
+        e = ydb.add_to_collection(self.db, cid, 1, set_code="LOB-001", edition="1st",
+                                  condition="NM", language="EN")
+        row = [r for r in ydb.list_collection(self.db) if r["entry_id"] == e]
+        self.assertEqual(ydb.print_label(row[0]), "LOB-001 (EN, 1st, NM)")
+        self.assertEqual(ydb.prints_summary(row), "1× LOB-001 (EN, 1st, NM)")
+
+    def test_remove_collection_card(self):
+        cid = self.unowned_id
+        ydb.add_to_collection(self.db, cid, 1, set_code="A")
+        ydb.add_to_collection(self.db, cid, 1, set_code="B")
+        other = self.count("collection") - 2
+        ydb.remove_collection_card(self.db, cid)
+        self.assertEqual(self.count("collection", "card_id = ?", (cid,)), 0)
+        self.assertEqual(self.count("collection"), other)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

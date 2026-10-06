@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 import yugioh_db as ydb
 
-from .carddetail import DetailPanel
+from .carddetail import CardDetailDialog, DetailPanel
 from .collection import CollectionView
 from .combos import ComboView
 from .deck import DeckView
@@ -136,6 +136,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(HelpView(), "Handbuch")
         # Spruenge ins Regelwerk (Kartendetails, Wortlaut, Spielfeld-Protokoll)
         navigation.set_rulebook_opener(self.open_rulebook)
+        # Karten-Details von ueberall (Regelwerk-Links, Einkaufsliste)
+        self._card_dialog: CardDetailDialog | None = None
+        navigation.set_card_opener(self.open_card_detail)
         # Geaenderte Rulings: Spielfeld-Tooltips aktualisieren.
         self.detail.rulings_changed.connect(self.playtest_view.reload_ruling_counts)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -362,6 +365,20 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.rulebook_view)
             self.raise_()
             self.activateWindow()
+
+    def open_card_detail(self, card_id: int) -> None:
+        """Karten-Pop-up (mit Wortlaut/Rulings) zeigen -- Ziel von
+        navigation.open_card; eine Instanz wird wiederverwendet."""
+        if self.repo.get_card(card_id) is None:
+            return
+        if self._card_dialog is None:
+            self._card_dialog = CardDetailDialog(self.repo, self)
+            self._card_dialog.rulings_changed.connect(
+                self.playtest_view.reload_ruling_counts)
+        self._card_dialog.load(card_id)
+        self._card_dialog.show()
+        self._card_dialog.raise_()
+        self._card_dialog.activateWindow()
 
     def closeEvent(self, event) -> None:
         # Noch nicht gespeicherte Kombo-Eingaben sichern (Auto-Save-Timer

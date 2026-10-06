@@ -452,16 +452,91 @@ class DeckViewTests(_ViewTestCase):
 
 class CollectionViewTests(_ViewTestCase):
     def _data_rows(self, view):
-        return [r for r in range(view.table.rowCount()) if view._entry_id_at(r) is not None]
+        return [r for r in range(view.table.rowCount()) if view._card_id_at(r) is not None]
+
+    def _row_of(self, view, card_id):
+        return next(r for r in range(view.table.rowCount())
+                    if view._card_id_at(r) == card_id)
+
+    def test_one_row_per_card_with_prints(self):
+        """Eine Karte = eine Zeile; die Drucke schluesseln nur die Menge auf."""
+        cid = self.unowned_ids(1)[0]
+        ydb.add_to_collection(self.db, cid, 2, set_code="RA01-DE008", language="DE")
+        ydb.add_to_collection(self.db, cid, 1, set_code="MP22-EN257", language="EN")
+        ydb.add_to_collection(self.db, cid, 3)
+        view = self.track(CollectionView(self.repo))
+        rows = [r for r in self._data_rows(view) if view._card_id_at(r) == cid]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(view.table.item(row, 1).data(Qt.ItemDataRole.EditRole), 6)
+        self.assertEqual(view.table.item(row, 2).text(),
+                         "2× RA01-DE008 (DE) · 1× MP22-EN257 (EN) · 3× ohne Set")
+        # Mehrere Drucke: Menge nicht direkt editierbar, Doppelklick -> Dialog.
+        self.assertIsNone(view._single_entry(row))
+        self.assertFalse(view.table.item(row, 1).flags() & Qt.ItemFlag.ItemIsEditable)
+        opened = []
+        self.ui.dialogs["CollectionPrintsDialog"] = lambda d: (
+            opened.append(d.card_id), QDialog.DialogCode.Accepted)[1]
+        view._open_detail(row, 1)
+        view._open_detail(row, 2)
+        self.assertEqual(opened, [cid, cid])
+
+    def test_prints_dialog_edits_merges_adds_and_removes(self):
+        from yugioh_gui.collection import CollectionPrintsDialog
+        from tests._support import pump
+        cid = self.unowned_ids(1)[0]
+        codes = [c["code"] for c in ydb.card_set_choices(self.db, cid)]
+        if not codes:
+            self.skipTest("Karte ohne Sets")
+        en_code, de_code = codes[0], ydb.localize_set_code(codes[0], "DE")
+        a = ydb.add_to_collection(self.db, cid, 1)
+        b = ydb.add_to_collection(self.db, cid, 2, set_code=en_code, language="EN")
+        dlg = self.track(CollectionPrintsDialog(self.repo, cid))
+        self.assertEqual(dlg.table.rowCount(), 2)
+        self.assertEqual(dlg.total.text(), "3 Exemplar(e) in 2 Druck(en)")
+
+        def row_of(entry):
+            return next(r for r in range(dlg.table.rowCount()) if dlg._entry_at(r) == entry)
+
+        # Set-Editor bietet die Sets der Karte in deutscher Schreibweise an.
+        delegate = dlg.table.itemDelegateForColumn(dlg.COL_SET)
+        editor = delegate.createEditor(dlg.table, None,
+                                       dlg.table.model().index(row_of(a), dlg.COL_SET))
+        self.assertIn(de_code, [editor.itemText(i).split(" · ")[0]
+                                for i in range(editor.count())])
+        editor.deleteLater()
+        dlg.table.item(row_of(a), dlg.COL_SET).setData(Qt.ItemDataRole.EditRole, de_code)
+        pump()
+        self.assertEqual(tuple(self.query("SELECT set_code, language FROM collection "
+                                          "WHERE entry_id = ?", (a,))[0]), (de_code, "DE"))
+        # Sprache EN -> Code wird umgeschrieben -> gleicher Druck wie b -> Merge.
+        dlg.table.item(row_of(a), dlg.COL_LANG).setData(Qt.ItemDataRole.EditRole, "EN")
+        pump()
+        self.assertIsNone(self.scalar("SELECT 1 FROM collection WHERE entry_id = ?", (a,)))
+        self.assertEqual(dlg.table.rowCount(), 1)
+        self.assertEqual(dlg._entry_at(dlg.table.currentRow()), b)
+        dlg.table.item(0, dlg.COL_QTY).setData(Qt.ItemDataRole.EditRole, 5)
+        pump()
+        self.assertEqual(self.scalar("SELECT quantity FROM collection WHERE entry_id = ?",
+                                     (b,)), 5)
+        dlg.add_qty.setValue(2)
+        dlg._add_print()                                     # (ohne Set), DE
+        self.assertEqual(dlg.table.rowCount(), 2)
+        dlg.table.setCurrentCell(row_of(b), 0)
+        dlg._remove_print()
+        self.assertIsNone(self.scalar("SELECT 1 FROM collection WHERE entry_id = ?", (b,)))
+        self.assertEqual(dlg.total.text(), "2 Exemplar(e) in 1 Druck(en)")
+        self.assertTrue(dlg.changed)
 
     def test_initial_table_and_summary(self):
         view = self.track(CollectionView(self.repo))
-        self.assertEqual(len(self._data_rows(view)), self.count("collection"))
+        unique_cards = self.scalar("SELECT COUNT(DISTINCT card_id) FROM collection")
+        self.assertEqual(len(self._data_rows(view)), unique_cards)
         entries, unique, total, untranslated = ydb.collection_summary_stats(self.db)
         self.assertGreater(untranslated, 0, "Dev-DB braucht unuebersetzte Bestandskarten")
         self.assertEqual(view.summary.text(),
-                         f"{entries} Einträge  ·  {unique} verschiedene Karten  ·  "
-                         f"{total} Karten gesamt  ·  {untranslated} ohne deutsche Übersetzung")
+                         f"{unique} verschiedene Karten  ·  {total} Karten gesamt  ·  "
+                         f"{entries} Drucke  ·  {untranslated} ohne deutsche Übersetzung")
         self.assertTrue(view.table.item(0, 0).text().startswith("Monster  ("))
         self.assertEqual(view.filter_attr.itemData(0), None)
         self.assertEqual(view.filter_attr.count() - 1,
@@ -471,7 +546,8 @@ class CollectionViewTests(_ViewTestCase):
         view = self.track(CollectionView(self.repo))
         view.filter_untranslated.setChecked(True)
         rows = self._data_rows(view)
-        self.assertEqual(len(rows), len(ydb.list_collection(self.db, untranslated_only=True)))
+        self.assertEqual(len(rows),
+                         len(ydb.list_collection_cards(self.db, untranslated_only=True)))
         for r in rows:
             self.assertIn("Noch keine deutsche Übersetzung", view.table.item(r, 0).toolTip())
         view.filter_untranslated.setChecked(False)
@@ -485,13 +561,20 @@ class CollectionViewTests(_ViewTestCase):
     def test_quantity_edit_writes_through(self):
         view = self.track(CollectionView(self.repo))
         row = self._data_rows(view)[0]
-        entry = view._entry_id_at(row)
+        entry = view._single_entry(row)
+        self.assertIsNotNone(entry, "Dev-DB: Karte mit genau einem Druck erwartet")
         view.table.item(row, 1).setData(Qt.ItemDataRole.EditRole, 9)
         self.assertEqual(self.scalar("SELECT quantity FROM collection WHERE entry_id = ?",
                                      (entry,)), 9)
         view.table.item(row, 1).setData(Qt.ItemDataRole.EditRole, 0)    # ignoriert
         self.assertEqual(self.scalar("SELECT quantity FROM collection WHERE entry_id = ?",
                                      (entry,)), 9)
+        # Aufschluesselung nennt die Menge mit (Druck mit Set).
+        ydb.update_collection_print(self.db, entry, "LOB-DE001", "DE")
+        view._apply_filters()
+        row = self._row_of(view, view._card_id_at(row))
+        view.table.item(row, 1).setData(Qt.ItemDataRole.EditRole, 4)
+        self.assertEqual(view.table.item(row, 2).text(), "4× LOB-DE001 (DE)")
 
     def test_quantity_delegate(self):
         view = self.track(CollectionView(self.repo))
@@ -506,23 +589,26 @@ class CollectionViewTests(_ViewTestCase):
         editor.setValue(42)
         delegate.setModelData(editor, view.table.model(), index)
         self.assertEqual(self.scalar("SELECT quantity FROM collection WHERE entry_id = ?",
-                                     (view._entry_id_at(row),)), 42)
+                                     (view._single_entry(row),)), 42)
 
-    def test_remove_selected(self):
+    def test_remove_selected_removes_all_prints(self):
         view = self.track(CollectionView(self.repo))
         view.table.setCurrentCell(0, 0)                      # Kopfzeile
         view._remove_selected()
         self.assertEqual(self.ui.messages, [])
-        row = self._data_rows(view)[0]
-        entry = view._entry_id_at(row)
-        before = self.count("collection")
-        view.table.setCurrentCell(row, 0)
+        cid = self.unowned_ids(1)[0]
+        ydb.add_to_collection(self.db, cid, 1, set_code="A")
+        ydb.add_to_collection(self.db, cid, 2, set_code="B")
+        view.refresh()
+        before = len(self._data_rows(view))
+        view.table.setCurrentCell(self._row_of(view, cid), 0)
         self.ui.question = QMessageBox.StandardButton.No
         view._remove_selected()
-        self.assertEqual(self.count("collection"), before)
+        self.assertEqual(self.count("collection", "card_id = ?", (cid,)), 2)
         self.ui.question = QMessageBox.StandardButton.Yes
         view._remove_selected()
-        self.assertIsNone(self.scalar("SELECT 1 FROM collection WHERE entry_id = ?", (entry,)))
+        self.assertIn("3 Exemplar(e)", self.ui.last_text())
+        self.assertEqual(self.count("collection", "card_id = ?", (cid,)), 0)
         self.assertEqual(len(self._data_rows(view)), before - 1)
 
     def test_export_uses_active_filter(self):

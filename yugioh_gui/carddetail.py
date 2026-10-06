@@ -15,7 +15,7 @@ import html
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox,
     QTextBrowser, QTextEdit, QVBoxLayout, QWidget
 )
@@ -359,6 +359,56 @@ class CardRulingsDialog(QDialog):
             self._reload()
 
 
+class PrintPicker(QWidget):
+    """Druck-Auswahl einer Karte: Set (bekannte Drucke aus den Kartendaten,
+    '(ohne Set)' vorne) und Sprache (DE vorbelegt). Bei Deutsch werden die
+    englischen API-Codes umgeschrieben (RA01-EN008 -> RA01-DE008); ein
+    Sprachwechsel behaelt das gewaehlte Set. Geteilt von DetailPanel und dem
+    Drucke-Dialog der Sammlung."""
+
+    def __init__(self, repo: "CardRepository", parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self._choices: list[dict] = []
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.set_cb = QComboBox()
+        self.set_cb.setToolTip("Set des Drucks (Codes aus den Kartendaten)")
+        self.set_cb.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.set_cb.setMinimumContentsLength(12)
+        self.lang_cb = QComboBox()
+        for key, _label in ydb.PRINT_LANGUAGES:
+            self.lang_cb.addItem(key, key)
+        self.lang_cb.setToolTip("Sprache des Drucks (Set-Code wird angepasst)")
+        self.lang_cb.currentIndexChanged.connect(self._on_language)
+        lay.addWidget(self.set_cb, stretch=1)
+        lay.addWidget(self.lang_cb)
+        self._fill()
+
+    def load(self, card_id: int) -> None:
+        """Sets einer (neuen) Karte laden; Auswahl auf '(ohne Set)'."""
+        self._choices = ydb.card_set_choices(self.repo.db_path, card_id)
+        self._fill()
+
+    def _on_language(self, *_a) -> None:
+        self._fill(keep=self.set_cb.currentIndex())
+
+    def _fill(self, keep: int = 0) -> None:
+        lang = self.lang_cb.currentData()
+        self.set_cb.clear()
+        self.set_cb.addItem("(ohne Set)", None)
+        for s in self._choices:
+            code = ydb.localize_set_code(s["code"], lang)
+            self.set_cb.addItem(f"{code} · {s['name']}", code)
+        if 0 < keep < self.set_cb.count():
+            self.set_cb.setCurrentIndex(keep)
+
+    def values(self) -> tuple[str | None, str | None]:
+        """(Set-Code oder None, Sprache)."""
+        return self.set_cb.currentData(), self.lang_cb.currentData()
+
+
 class _CardHelpMixin:
     """Knoepfe 'Wortlaut ?' und 'Rulings (n)' fuer DetailPanel und
     CardDetailDialog (beide haben repo und current_id). Nach Aenderungen an
@@ -437,16 +487,18 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
         self.text = QTextEdit()
         self.text.setReadOnly(True)
 
-        # Sammlung
-        coll_box = QGroupBox("Sammlung")
+        # Sammlung: Druck (Set + Sprache) waehlen, Menge, Hinzufuegen -- eine
+        # Zeile; der Bestand steht im Gruppentitel (die Detailspalte bestimmt
+        # die Mindesthoehe des Hauptfensters mit).
+        self.coll_box = coll_box = QGroupBox("Sammlung")
         coll_layout = QHBoxLayout(coll_box)
-        self.owned = QLabel("im Bestand: 0")
+        self.picker = PrintPicker(repo)
+        self.set_cb, self.lang_cb = self.picker.set_cb, self.picker.lang_cb
         self.qty = QSpinBox()
         self.qty.setRange(1, 99)
         self.add_btn = QPushButton("Hinzufügen")
         self.add_btn.clicked.connect(self._add_to_collection)
-        coll_layout.addWidget(self.owned)
-        coll_layout.addStretch()
+        coll_layout.addWidget(self.picker, stretch=1)
         coll_layout.addWidget(self.qty)
         coll_layout.addWidget(self.add_btn)
 
@@ -488,6 +540,8 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
         self._set_enabled(False)
 
     def _set_enabled(self, on: bool):
+        self.set_cb.setEnabled(on)
+        self.lang_cb.setEnabled(on)
         self.qty.setEnabled(on)
         self.add_btn.setEnabled(on)
         self.add_deck_btn.setEnabled(on)
@@ -527,6 +581,7 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
 
         self._load_image(card["id"])
         self._update_owned(card["id"])
+        self.picker.load(card["id"])
         self._update_rulings_btn()
         self._set_enabled(True)
 
@@ -538,12 +593,16 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
             text += f"  ·  in Decks: {bound}"
             if bound > owned:
                 text += "  ⚠"
-        self.owned.setText(text)
+        self.coll_box.setTitle(f"Sammlung — {text}")
 
     def _add_to_collection(self) -> None:
         if self.current_id is None:
             return
-        ydb.add_to_collection(self.repo.db_path, self.current_id, self.qty.value())
+        code, lang = self.picker.values()
+        ydb.add_to_collection(
+            self.repo.db_path, self.current_id, self.qty.value(),
+            set_code=code, language=lang,
+        )
         self._update_owned(self.current_id)
 
 

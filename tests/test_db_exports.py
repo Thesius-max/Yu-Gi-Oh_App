@@ -77,10 +77,10 @@ class CollectionExportTests(CardIdsTestCase):
         lines = text.splitlines()
         self.assertEqual(lines[0], "Sammlung")
         self.assertEqual(lines[1], f"Stand: {TODAY}")
-        self.assertEqual(lines[2], f"{entries} Eintrag(e) · {unique} verschiedene "
-                                   f"Karten · {total} Karten gesamt")
-        # Eine Zeile je Eintrag, Gruppen-Summen ergeben das Gesamt.
-        self.assertEqual(sum(1 for l in lines if re.match(r"  \d+x ", l)), entries)
+        self.assertEqual(lines[2], f"{unique} verschiedene Karten · {total} Karten "
+                                   f"gesamt · {entries} Druck(e)")
+        # Eine Zeile je KARTE, Gruppen-Summen ergeben das Gesamt.
+        self.assertEqual(sum(1 for l in lines if re.match(r"  \d+x ", l)), unique)
         group_sum = sum(int(m) for m in re.findall(r"^== \w+ \((\d+)\) ==$", text, re.M))
         self.assertEqual(group_sum, total)
         self.assertTrue(text.endswith("\n"))
@@ -92,11 +92,19 @@ class CollectionExportTests(CardIdsTestCase):
         self.assertEqual(heads, [h for h in order if h in heads])
 
     def test_print_details_and_notes_in_line(self):
+        """Mehrere Drucke einer Karte: eine Zeile mit Gesamtmenge und
+        Aufschluesselung; Notizen verbunden."""
         ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="LOB-001",
                               edition="1st", condition="NM", notes=" Binder ")
-        text = ydb.export_collection_text(self.db, text=self.display_name(self.unowned_id))
-        self.assertIn(f"  2x {self.display_name(self.unowned_id)}  "
-                      f"[LOB-001, 1st, NM]  (Binder)", text)
+        ydb.add_to_collection(self.db, self.unowned_id, 1, set_code="RA01-DE008",
+                              language="DE", notes="Deck-Box")
+        name = self.display_name(self.unowned_id)
+        text = ydb.export_collection_text(self.db, text=name)
+        self.assertIn(f"  3x {name}  [2× LOB-001 (1st, NM) · 1× RA01-DE008 (DE)]  "
+                      f"(Binder; Deck-Box)", text)
+        self.assertEqual(text.count(f"x {name}"), 1)
+        md = ydb.export_collection_markdown(self.db, text=name)
+        self.assertIn("- Drucke: 2× LOB-001 (1st, NM) · 1× RA01-DE008 (DE)", md)
 
     def test_untranslated_filter_in_title_and_content(self):
         text = ydb.export_collection_text(self.db, untranslated_only=True)
@@ -131,26 +139,28 @@ class CollectionExportTests(CardIdsTestCase):
     def test_collection_csv(self):
         ydb.add_to_collection(self.db, self.unowned_id, 2, set_code="LOB-001",
                               condition="NM", notes="Binder; Seite 3\nunten")
+        ydb.add_to_collection(self.db, self.unowned_id, 1)
         data = ydb.export_collection_csv(self.db)
         rows = list(csv.reader(io.StringIO(data, newline=""), delimiter=";"))
         header, body = rows[0], rows[1:]
         self.assertEqual(header[0], "Anzahl")
+        self.assertEqual(header[-2:], ["Drucke", "Notizen"])
         self.assertNotIn("Effekttext", header)
-        entries, _unique, total = ydb.collection_stats(self.db)
-        self.assertEqual(len(body), entries)
+        _entries, unique, total = ydb.collection_stats(self.db)
+        self.assertEqual(len(body), unique)                    # eine Zeile je Karte
         self.assertEqual(sum(int(r[0]) for r in body), total)
-        row = next(r for r in body if r[header.index("Set-Code")] == "LOB-001")
+        row = next(r for r in body if r[header.index("Passcode")] == str(self.unowned_id))
+        self.assertEqual(row[0], "3")
+        self.assertEqual(row[header.index("Drucke")], "2× LOB-001 (NM) · 1× ohne Set")
         self.assertEqual(row[header.index("Notizen")], "Binder; Seite 3\nunten")
-        self.assertEqual(row[header.index("Passcode")], str(self.unowned_id))
-        self.assertEqual(row[header.index("Zustand")], "NM")
         spells = ydb.export_collection_csv(self.db, category="spell")
         spell_rows = list(csv.reader(io.StringIO(spells, newline=""), delimiter=";"))[1:]
-        self.assertEqual(len(spell_rows), len(ydb.list_collection(self.db, category="spell")))
+        self.assertEqual(len(spell_rows), len(ydb.list_collection_cards(self.db, category="spell")))
         self.assertTrue(all(r[header.index("Kartenklasse")] == "Zauber" for r in spell_rows))
 
     def test_empty_filter_result(self):
         text = ydb.export_collection_text(self.db, text="garantiert-kein-treffer")
-        self.assertIn("0 Eintrag(e) · 0 verschiedene Karten · 0 Karten gesamt", text)
+        self.assertIn("0 verschiedene Karten · 0 Karten gesamt · 0 Druck(e)", text)
         self.assertNotIn("==", text)
 
 
@@ -315,6 +325,27 @@ class ComboLinesExportTests(CardIdsTestCase):
         md = ydb.export_deck_markdown(self.db, deck)
         fences = re.findall(r"^(`+)$", md, re.M)
         self.assertEqual(fences, ["````", "````"])
+
+
+class ShoppingExportTests(CardIdsTestCase):
+    def test_exports(self):
+        self.assertIn("Es fehlt nichts", ydb.export_shopping_list_text(self.db))
+        cid = self.unowned_ids(1)[0]
+        deck = ydb.create_deck(self.db, "Wunsch")
+        ydb.add_card_to_deck(self.db, deck, cid, count=2)
+        name = self.display_name(cid)
+        text = ydb.export_shopping_list_text(self.db)
+        self.assertIn(f"  2x {name}   (benötigt 2, im Bestand 0; Wunsch 2x)", text)
+        md = ydb.export_shopping_list_markdown(self.db)
+        self.assertIn("| Fehlt | Karte | Benötigt | Im Bestand | Decks |", md)
+        rows = list(csv.reader(io.StringIO(ydb.export_shopping_list_csv(self.db),
+                                           newline=""), delimiter=";"))
+        header, body = rows[0], rows[1:]
+        self.assertEqual(header[0], "Fehlt")
+        self.assertEqual(header[-3:], ["Benötigt", "Im Bestand", "Decks"])
+        row = next(r for r in body if r[header.index("Passcode")] == str(cid))
+        self.assertEqual((row[0], row[-1]), ("2", "Wunsch 2x"))
+        self.assertEqual(len(body), len(ydb.shopping_list(self.db)))
 
 
 if __name__ == "__main__":

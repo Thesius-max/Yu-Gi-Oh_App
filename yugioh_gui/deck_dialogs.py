@@ -1,9 +1,11 @@
-"""Dialoge des Deck-Tabs: Kombo-aus-Deck, Referenz-Korpus, Listen-Diff.
+"""Dialoge des Deck-Tabs: Kombo-aus-Deck, Referenz-Korpus, Listen-Diff,
+Einkaufsliste.
 
 ComboFromDeckDialog (Bausteine aus Deck-Karten ankreuzen),
 ReferenceDeckDialog (Meta-Listen als .ydk in den Korpus importieren;
-binden keinen Bestand) und DeckCorpusDiffDialog (kopiengenauer
-Vergleich Main+Extra gegen eine Referenz-Liste).
+binden keinen Bestand), DeckCorpusDiffDialog (kopiengenauer
+Vergleich Main+Extra gegen eine Referenz-Liste) und ShoppingListDialog
+(fehlende Karten ueber alle eigenen Decks, mit Export).
 """
 
 from __future__ import annotations
@@ -13,13 +15,18 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QTextBrowser, QVBoxLayout
+    QAbstractItemView, QComboBox, QDialog, QFileDialog, QFormLayout,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextBrowser,
+    QVBoxLayout
 )
 
 import yugioh_db as ydb
 
+from . import navigation
+from .exporting import (
+    resolve_export_path, write_csv_file, write_text_file, write_text_pdf
+)
 from .labels import ZONE_LABELS, import_report_lines
 from .repository import CardRepository
 
@@ -318,3 +325,100 @@ class DeckCorpusDiffDialog(QDialog):
             self.report.setPlainText(str(exc))
             return
         self.report.setPlainText(_format_corpus_diff(d))
+
+
+class ShoppingListDialog(QDialog):
+    """Einkaufsliste: welche Karten fehlen, um alle eigenen Decks
+    gleichzeitig aus dem Bestand zu bauen (Referenz-Decks zaehlen nicht).
+    Doppelklick zeigt die Karte, 'Exportieren…' schreibt .txt/.pdf/.md/.csv."""
+
+    COLUMNS = ["Karte", "Fehlt", "Benötigt", "Im Bestand", "Decks"]
+
+    def __init__(self, repo: CardRepository, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.setWindowTitle("Einkaufsliste — alle eigenen Decks")
+        self.resize(760, 520)
+        lay = QVBoxLayout(self)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        lay.addWidget(self.summary)
+        self.table = QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.cellDoubleClicked.connect(self._open_card)
+        lay.addWidget(self.table, stretch=1)
+        row = QHBoxLayout()
+        hint = QLabel("Bedarf = alle eigenen Decks gleichzeitig aufgebaut "
+                      "(Kopien in anderen Decks binden Bestand).")
+        hint.setObjectName("HintLabel")
+        row.addWidget(hint, stretch=1)
+        self.export_btn = QPushButton("Exportieren…")
+        self.export_btn.clicked.connect(self._export)
+        row.addWidget(self.export_btn)
+        close = QPushButton("Schließen")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.reload()
+
+    def reload(self) -> None:
+        items = ydb.shopping_list(self.repo.db_path)
+        self.table.setRowCount(0)
+        for item in items:
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            name = QTableWidgetItem(item["name"])
+            name.setData(Qt.ItemDataRole.UserRole, item["card_id"])
+            name.setToolTip("Doppelklick: Kartendetails")
+            self.table.setItem(r, 0, name)
+            for col, key in ((1, "missing"), (2, "needed"), (3, "owned")):
+                cell = QTableWidgetItem(str(item[key]))
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(r, col, cell)
+            self.table.setItem(r, 4, QTableWidgetItem(
+                ", ".join(f"{d} {n}x" for d, n in item["decks"])))
+        copies = sum(i["missing"] for i in items)
+        self.summary.setText(
+            f"{len(items)} Karte(n), {copies} fehlende Kopie(n)." if items
+            else "Es fehlt nichts — alle eigenen Decks sind aus dem Bestand baubar.")
+        self.export_btn.setEnabled(bool(items))
+
+    def _open_card(self, row: int, _col: int) -> None:
+        item = self.table.item(row, 0)
+        if item is not None:
+            navigation.open_card(item.data(Qt.ItemDataRole.UserRole))
+
+    def _export(self) -> None:
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Einkaufsliste exportieren", "einkaufsliste.txt",
+            "Textdatei (*.txt);;PDF-Datei (*.pdf);;Markdown (*.md);;"
+            "CSV für Excel (*.csv)",
+        )
+        if not path:
+            return
+        path, ext = resolve_export_path(
+            path, selected,
+            {"Text": ".txt", "PDF": ".pdf", "Markdown": ".md", "CSV": ".csv"},
+            default_ext=".txt",
+        )
+        db = self.repo.db_path
+        try:
+            if ext == ".csv":
+                write_csv_file(path, ydb.export_shopping_list_csv(db))
+            elif ext == ".md":
+                write_text_file(path, ydb.export_shopping_list_markdown(db))
+            elif ext == ".pdf":
+                write_text_pdf(path, ydb.export_shopping_list_text(db))
+            else:
+                write_text_file(path, ydb.export_shopping_list_text(db))
+        except OSError as exc:
+            QMessageBox.warning(self, "Export fehlgeschlagen", str(exc))
+            return
+        self.summary.setText(self.summary.text().split("  ·  ")[0]
+                             + f"  ·  exportiert nach {path}")

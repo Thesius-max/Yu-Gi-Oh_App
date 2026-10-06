@@ -24,7 +24,7 @@ mischt sein Deck und zieht **5 Karten**.
 - die LP des Gegners auf **0** bringt,
 - den Gegner zwingt, von einem **leeren Deck** zu ziehen (Deck-Out), oder
 - eine **Sonder-Siegbedingung** einer Karte erfüllt (z. B. alle fünf Teile
-  von „Exodia“ auf der Hand).
+  von „[Exodia](card:33396948)“ auf der Hand).
 
 Fallen beide Spieler gleichzeitig auf 0 LP, endet das Duell unentschieden.
 
@@ -174,7 +174,7 @@ nur in deiner Main Phase aktiviert.
 Fallen müssen **zuerst gesetzt** werden und dürfen **frühestens im nächsten
 Zug** aktiviert werden — auch im Zug des Gegners. Ausnahmen stehen im
 Kartentext (z. B. „Falls du keine Karten kontrollierst, kannst du diese
-Karte von deiner Hand aktivieren“ bei Infinite Impermanence).
+Karte von deiner Hand aktivieren“ bei [Infinite Impermanence](card:10045474)).
 """),
 
     ("beschwoerung", "Beschwörungsarten", """\
@@ -216,7 +216,7 @@ ergeben, und beschwöre es aus der Hand.
 
 ## Fusionsbeschwörung
 
-Mit einer Karte wie „Polymerization“: Die im Text des Fusionsmonsters
+Mit einer Karte wie „[Polymerization](card:24094653)“: Die im Text des Fusionsmonsters
 genannten **Fusionsmaterialien** (meist aus Hand/Feld) gehen in den
 Friedhof, das Fusionsmonster kommt aus dem Extra Deck.
 
@@ -349,7 +349,7 @@ Zauber und Fallen haben ihre eigene Zauberschnelligkeit (siehe
 
 Die meisten Monstereffekte wirken auf dem Feld. Effekte, die ausdrücklich
 **Hand**, **Friedhof** oder **Verbannt** nennen, werden **dort** aktiviert
-(z. B. Handtraps wie Ash Blossom: „Du kannst diese Karte abwerfen; …“).
+(z. B. Handtraps wie [Ash Blossom](card:14558127): „Du kannst diese Karte abwerfen; …“).
 """),
 
     ("ketten", "Ketten & Zauberschnelligkeit", """\
@@ -415,14 +415,14 @@ zerlegt jede Karte nach diesen Regeln.
 - **Nach dem Semikolon** steht, was **bei der Auflösung** passiert.
 - **Ohne Doppelpunkt und Semikolon** ist es meist ein **Dauereffekt**.
 
-**Beispiel — Ash Blossom & Joyous Spring**
+**Beispiel — [Ash Blossom & Joyous Spring](card:14558127)**
 „Wenn eine Karte oder ein Effekt aktiviert wird, die/der … (Schnelleffekt):
 Du kannst diese Karte abwerfen; annulliere jenen Effekt.“
 → Bedingung *wenn …*, Schnelleffekt, **Kosten**: sich selbst abwerfen,
 **Auflösung**: annullieren. Wird Ash annulliert, bleibt sie trotzdem
 abgeworfen.
 
-**Beispiel — Infinite Impermanence**
+**Beispiel — [Infinite Impermanence](card:10045474)**
 „Wähle 1 offenes Monster, das dein Gegner kontrolliert; annulliere seine
 Effekte …“ → das **Ziel** wird beim Aktivieren gewählt.
 
@@ -465,7 +465,7 @@ wurde — er wurde ja verwendet.
 ## Einschränkungen (Locks)
 
 „…, **außerdem kannst du** für den Rest dieses Spielzugs keine Monster als
-Spezialbeschwörung vom Extra Deck beschwören, außer …“ (Bone Archfiend) —
+Spezialbeschwörung vom Extra Deck beschwören, außer …“ ([Bone Archfiend](card:25784595)) —
 Teil der Auflösung: greift, wenn der Effekt aufgelöst wird.
 „Du kannst **in dem Spielzug, in dem du diesen Effekt aktivierst**, keine …“
 — gilt für den **ganzen** Zug, auch schon **vor** der Aktivierung, und

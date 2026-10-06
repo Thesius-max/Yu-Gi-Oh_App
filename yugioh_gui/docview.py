@@ -3,16 +3,21 @@
 Geteilt von Handbuch- und Regelwerk-Tab: links das Suchfeld und die
 Kapitelliste, rechts das gewaehlte Kapitel als gerendertes Markdown. Die
 Suche filtert Kapitel nach Titel und Text (casefold, also auch 'Ü'/'ü')
-und springt im gezeigten Kapitel zur ersten Fundstelle.
+und springt im gezeigten Kapitel zur ersten Fundstelle. Links: 'card:<id>'
+oeffnet die Kartendetails (navigation.open_card), 'rulebook:<key>' ein
+Kapitel dieser Ansicht, alles andere der Browser.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QSplitter, QTextBrowser,
     QVBoxLayout, QWidget
 )
+
+from . import navigation
 
 
 class DocView(QWidget):
@@ -46,7 +51,8 @@ class DocView(QWidget):
         splitter.addWidget(left)
 
         self.content = QTextBrowser()
-        self.content.setOpenExternalLinks(True)
+        self.content.setOpenLinks(False)
+        self.content.anchorClicked.connect(self._on_link)
         splitter.addWidget(self.content)
         splitter.setSizes([240, 760])
 
@@ -64,6 +70,15 @@ class DocView(QWidget):
         term = self.search.text().strip()
         if term:
             self.content.find(term)       # erste Fundstelle markieren
+
+    def _on_link(self, url: QUrl) -> None:
+        scheme = url.scheme()
+        if scheme == "card" and url.path().isdigit():
+            navigation.open_card(int(url.path()))
+        elif scheme == "rulebook":
+            self.show_section(url.path())
+        else:
+            QDesktopServices.openUrl(url)
 
     def current_key(self) -> str | None:
         item = self.index.currentItem()

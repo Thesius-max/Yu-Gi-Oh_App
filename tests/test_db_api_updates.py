@@ -179,6 +179,17 @@ class FullUpdateTests(DevDbTestCase):
         self.assertEqual(self.scalar(sql, (link,)), self.REAL_LINK_MARKERS[link])
         self.assertIsNone(self.scalar(sql, (self.main_ids(1)[0],)))
 
+    def test_set_names_are_unescaped(self):
+        cards, de = api_payload_from_db(self.db)
+        hit = next(c for c in cards for s in c["card_sets"]
+                   if s["set_name"] and "&apos;" in s["set_name"])
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        self.assertEqual(self.count("card_sets", "set_name LIKE '%&apos;%'"), 0)
+        names = [r[0] for r in self.query(
+            "SELECT set_name FROM card_sets WHERE card_id = ?", (hit["id"],))]
+        self.assertTrue(any("'" in n for n in names))
+
     def test_update_invalidates_wording_flags(self):
         self.assertGreater(ydb.ensure_wording_flags(self.db), 0)
         self.assertEqual(ydb.ensure_wording_flags(self.db), 0)

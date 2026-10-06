@@ -19,12 +19,12 @@ from typing import Optional
 
 from .analysis import deck_consistency
 from .cards import card_category
-from .collection import list_collection
+from .collection import list_collection_cards, prints_summary
 from .combos import (
     COMBO_ROLES, ROLE_LABEL, combo_cards, combo_coverage, combo_steps,
     combo_variants, combos_for_deck, deck_role_summary, get_combo,
 )
-from .decks import deck_cards
+from .decks import deck_cards, shopping_list
 from .rulings import list_card_rulings
 from .schema import _conn
 
@@ -320,48 +320,52 @@ def _to_csv(header, rows) -> str:
     return buf.getvalue()
 
 
+def _card_notes(card: dict) -> str:
+    """Notizen aller Drucke einer Karte, verbunden."""
+    return "; ".join(p["notes"].strip() for p in card["prints"]
+                     if p["notes"] and p["notes"].strip())
+
+
 def export_collection_text(
     db_path: str, text: Optional[str] = None, category: Optional[str] = None,
     attribute: Optional[str] = None, archetype: Optional[str] = None,
     untranslated_only: bool = False,
 ) -> str:
-    """Sammlung als lesbarer Text -- ein Druck (Eintrag) je Zeile, gruppiert
-    nach Kartenklasse. Beruecksichtigt dieselben Filter wie die Sammlungs-
-    Ansicht; ohne Filter ist es die gesamte Sammlung."""
-    rows = list_collection(
+    """Sammlung als lesbarer Text -- **eine Zeile je Karte** mit Gesamtmenge
+    und Aufschluesselung nach Drucken, gruppiert nach Kartenklasse.
+    Beruecksichtigt dieselben Filter wie die Sammlungs-Ansicht; ohne Filter
+    ist es die gesamte Sammlung."""
+    cards = list_collection_cards(
         db_path, text, category, attribute, archetype,
         untranslated_only=untranslated_only,
     )
     note = _export_filter_note(
         text, category, attribute, archetype, untranslated_only
     )
-    total = sum(r["quantity"] for r in rows)
-    unique = len({r["card_id"] for r in rows})
+    total = sum(c["quantity"] for c in cards)
+    n_prints = sum(len(c["prints"]) for c in cards)
     out = [
         "Sammlung" + (f" — {note}" if note else ""),
         f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}",
-        f"{len(rows)} Eintrag(e) · {unique} verschiedene Karten · "
-        f"{total} Karten gesamt",
+        f"{len(cards)} verschiedene Karten · {total} Karten gesamt · "
+        f"{n_prints} Druck(e)",
     ]
-    by_cat: dict[str, list[sqlite3.Row]] = {}
-    for r in rows:
-        by_cat.setdefault(card_category(r["type"]), []).append(r)
+    by_cat: dict[str, list[dict]] = {}
+    for c in cards:
+        by_cat.setdefault(card_category(c["type"]), []).append(c)
     for cat in _EXPORT_CATEGORY_ORDER:
-        crows = by_cat.get(cat)
-        if not crows:
+        group = by_cat.get(cat)
+        if not group:
             continue
-        cat_total = sum(r["quantity"] for r in crows)
+        cat_total = sum(c["quantity"] for c in group)
         out += ["", f"== {_EXPORT_CATEGORY_DE[cat]} ({cat_total}) =="]
-        for r in crows:
-            name = r["name_de"] or r["name"]
-            detail = [
-                r[k] for k in ("set_code", "edition", "condition", "language")
-                if r[k]
-            ]
-            tail = f"  [{', '.join(detail)}]" if detail else ""
-            nt = r["notes"].strip() if r["notes"] else ""
-            note_t = f"  ({nt})" if nt else ""
-            out.append(f"  {r['quantity']}x {name}{tail}{note_t}")
+        for c in group:
+            name = c["name_de"] or c["name"]
+            summary = prints_summary(c["prints"])
+            tail = f"  [{summary}]" if summary else ""
+            notes = _card_notes(c)
+            note_t = f"  ({notes})" if notes else ""
+            out.append(f"  {c['quantity']}x {name}{tail}{note_t}")
     return "\n".join(out) + "\n"
 
 
@@ -370,21 +374,14 @@ def export_collection_markdown(
     attribute: Optional[str] = None, archetype: Optional[str] = None,
     untranslated_only: bool = False,
 ) -> str:
-    """Sammlung als Markdown-Bestandsliste: je Karte Gesamtmenge, Typzeile
-    und Archetyp -- bewusst **ohne Effekttext** (Effekttexte gibt es nur im
-    Deck-Export). Gleiche Filter wie die Sammlungs-Ansicht."""
-    rows = list_collection(
+    """Sammlung als Markdown-Bestandsliste: je Karte Gesamtmenge, Typzeile,
+    Archetyp und Drucke -- bewusst **ohne Effekttext** (Effekttexte gibt es
+    nur im Deck-Export). Gleiche Filter wie die Sammlungs-Ansicht."""
+    cards = list_collection_cards(
         db_path, text, category, attribute, archetype,
         untranslated_only=untranslated_only,
     )
-    qty: dict[int, int] = {}
-    order: list[int] = []
-    for r in rows:
-        if r["card_id"] not in qty:
-            order.append(r["card_id"])
-            qty[r["card_id"]] = 0
-        qty[r["card_id"]] += r["quantity"]
-    details = _card_details(db_path, order)
+    details = _card_details(db_path, [c["card_id"] for c in cards])
     note = _export_filter_note(
         text, category, attribute, archetype, untranslated_only
     )
@@ -392,23 +389,28 @@ def export_collection_markdown(
         "# Yu-Gi-Oh!-Sammlung" + (f" — {note}" if note else ""),
         "",
         f"Stand: {datetime.date.today().strftime('%d.%m.%Y')} · "
-        f"{len(order)} verschiedene Karten · {sum(qty.values())} gesamt",
+        f"{len(cards)} verschiedene Karten · "
+        f"{sum(c['quantity'] for c in cards)} gesamt",
         "",
-        "Bestandsliste: jede Karte mit besessener Menge, Typ und Archetyp "
-        "(ohne Effekttexte).",
+        "Bestandsliste: jede Karte mit besessener Menge, Typ, Archetyp und "
+        "Drucken (ohne Effekttexte).",
     ]
-    by_cat: dict[str, list[int]] = {}
-    for cid in order:
-        d = details.get(cid)
-        by_cat.setdefault(card_category(d["type"] if d else None), []).append(cid)
+    by_cat: dict[str, list[dict]] = {}
+    for c in cards:
+        d = details.get(c["card_id"])
+        by_cat.setdefault(card_category(d["type"] if d else None), []).append(c)
     for cat in _EXPORT_CATEGORY_ORDER:
-        cids = by_cat.get(cat)
-        if not cids:
+        group = by_cat.get(cat)
+        if not group:
             continue
-        lines += ["", f"## {_EXPORT_CATEGORY_DE[cat]} ({len(cids)})", ""]
-        for cid in cids:
-            lines += _card_md_block(details.get(cid), f"{qty[cid]}x ",
-                                    with_text=False)
+        lines += ["", f"## {_EXPORT_CATEGORY_DE[cat]} ({len(group)})", ""]
+        for c in group:
+            block = _card_md_block(details.get(c["card_id"]), f"{c['quantity']}x ",
+                                   with_text=False)
+            summary = prints_summary(c["prints"])
+            if summary:
+                block.insert(-1, f"- Drucke: {_md_inline(summary)}")
+            lines += block
     return "\n".join(lines) + "\n"
 
 
@@ -417,20 +419,19 @@ def export_collection_csv(
     attribute: Optional[str] = None, archetype: Optional[str] = None,
     untranslated_only: bool = False,
 ) -> str:
-    """Sammlung als CSV (Semikolon, fuer Excel): eine Zeile je Eintrag
-    (Druck) mit Menge, Kartendaten und Druck-Angaben -- ohne Effekttext.
-    Gleiche Filter wie die Sammlungs-Ansicht."""
-    rows = list_collection(
+    """Sammlung als CSV (Semikolon, fuer Excel): **eine Zeile je Karte**
+    mit Gesamtmenge, Kartendaten, Drucken (Aufschluesselung) und Notizen --
+    ohne Effekttext. Gleiche Filter wie die Sammlungs-Ansicht."""
+    cards = list_collection_cards(
         db_path, text, category, attribute, archetype,
         untranslated_only=untranslated_only,
     )
-    details = _card_details(db_path, sorted({r["card_id"] for r in rows}))
-    header = ("Anzahl",) + _CARD_COLUMNS + (
-        "Set-Code", "Edition", "Zustand", "Sprache", "Notizen")
+    details = _card_details(db_path, [c["card_id"] for c in cards])
+    header = ("Anzahl",) + _CARD_COLUMNS + ("Drucke", "Notizen")
     return _to_csv(header, [
-        [r["quantity"]] + _card_csv_cells(r["card_id"], details.get(r["card_id"]))
-        + [r[k] or "" for k in ("set_code", "edition", "condition", "language", "notes")]
-        for r in rows
+        [c["quantity"]] + _card_csv_cells(c["card_id"], details.get(c["card_id"]))
+        + [prints_summary(c["prints"]), _card_notes(c)]
+        for c in cards
     ])
 
 
@@ -541,3 +542,61 @@ def export_deck_markdown(db_path: str, deck_id: int) -> str:
     fence = _md_fence(combo_text)
     lines += ["", "## Konsistenz & Kombo-Linien", "", fence, combo_text, fence, ""]
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Einkaufsliste (fehlende Karten ueber alle eigenen Decks)
+# ---------------------------------------------------------------------------
+
+def _shopping_summary(items: list[dict]) -> str:
+    return (f"{len(items)} Karte(n) · {sum(i['missing'] for i in items)} "
+            "fehlende Kopie(n) · Bedarf = alle eigenen Decks gleichzeitig")
+
+
+def _decks_text(item: dict) -> str:
+    return ", ".join(f"{name} {n}x" for name, n in item["decks"])
+
+
+def export_shopping_list_text(db_path: str) -> str:
+    """Einkaufsliste als lesbarer Text (.txt/.pdf): je Karte die Fehlmenge,
+    Bedarf, Bestand und in welchen Decks sie steckt."""
+    items = shopping_list(db_path)
+    out = ["Einkaufsliste", f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}",
+           _shopping_summary(items), ""]
+    if not items:
+        out.append("Es fehlt nichts — alle eigenen Decks sind aus dem Bestand baubar.")
+    for i in items:
+        out.append(f"  {i['missing']}x {i['name']}   (benötigt {i['needed']}, "
+                   f"im Bestand {i['owned']}; {_decks_text(i)})")
+    return "\n".join(out) + "\n"
+
+
+def export_shopping_list_markdown(db_path: str) -> str:
+    """Einkaufsliste als Markdown-Tabelle (.md)."""
+    items = shopping_list(db_path)
+    lines = ["# Einkaufsliste", "",
+             f"Stand: {datetime.date.today().strftime('%d.%m.%Y')} · "
+             + _shopping_summary(items), ""]
+    if not items:
+        lines.append("Es fehlt nichts — alle eigenen Decks sind aus dem Bestand baubar.")
+        return "\n".join(lines) + "\n"
+    lines += ["| Fehlt | Karte | Benötigt | Im Bestand | Decks |",
+              "|---:|---|---:|---:|---|"]
+    for i in items:
+        name = _md_inline(i["name"]).replace("|", "\\|")
+        decks = _md_inline(_decks_text(i)).replace("|", "\\|")
+        lines.append(f"| {i['missing']} | {name} | {i['needed']} | {i['owned']} | {decks} |")
+    return "\n".join(lines) + "\n"
+
+
+def export_shopping_list_csv(db_path: str) -> str:
+    """Einkaufsliste als CSV fuer Excel: Fehlmenge, Kartenspalten, Bedarf,
+    Bestand und Decks."""
+    items = shopping_list(db_path)
+    details = _card_details(db_path, [i["card_id"] for i in items])
+    header = ("Fehlt",) + _CARD_COLUMNS + ("Benötigt", "Im Bestand", "Decks")
+    return _to_csv(header, [
+        [i["missing"]] + _card_csv_cells(i["card_id"], details.get(i["card_id"]))
+        + [i["needed"], i["owned"], _decks_text(i)]
+        for i in items
+    ])

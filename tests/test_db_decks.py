@@ -483,5 +483,26 @@ class CorpusDiffRealDataTests(CardIdsTestCase):
         self.assertEqual(d["shared_cards"], d["ref_cards"])
 
 
+class ShoppingListTests(CardIdsTestCase):
+    def test_sums_own_decks_and_ignores_reference_decks(self):
+        cid = self.unowned_ids(1)[0]
+        self.assertNotIn(cid, {i["card_id"] for i in ydb.shopping_list(self.db)})
+        a, b = ydb.create_deck(self.db, "A-Deck"), ydb.create_deck(self.db, "B-Deck")
+        ref = ydb.create_deck(self.db, "Meta", kind="reference")
+        ydb.add_card_to_deck(self.db, a, cid, count=3)
+        ydb.add_card_to_deck(self.db, b, cid, zone="side", count=2)
+        ydb.add_card_to_deck(self.db, ref, cid, count=3)          # zaehlt nicht
+        item = {i["card_id"]: i for i in ydb.shopping_list(self.db)}[cid]
+        self.assertEqual((item["needed"], item["owned"], item["missing"]), (5, 0, 5))
+        self.assertEqual(item["decks"], [("A-Deck", 3), ("B-Deck", 2)])
+        ydb.add_to_collection(self.db, cid, 3, set_code="X")
+        ydb.add_to_collection(self.db, cid, 1)                    # Drucke zusammen
+        item = {i["card_id"]: i for i in ydb.shopping_list(self.db)}[cid]
+        self.assertEqual((item["owned"], item["missing"]), (4, 1))
+        ydb.add_to_collection(self.db, cid, 1)
+        self.assertNotIn(cid, {i["card_id"] for i in ydb.shopping_list(self.db)})
+        self.assertTrue(all(i["missing"] > 0 for i in ydb.shopping_list(self.db)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -278,6 +278,44 @@ def deck_availability(db_path: str, deck_id: int) -> list[dict]:
     return out
 
 
+def shopping_list(db_path: str) -> list[dict]:
+    """Einkaufsliste ueber alle EIGENEN Decks (Referenz-Decks zaehlen nicht),
+    alle Zonen: benoetigt wird die Summe der Kopien -- alle Decks sollen
+    gleichzeitig aufgebaut sein koennen (Kopien in anderen Decks binden
+    Bestand). Je Karte mit Fehlmenge:
+      needed  -- Kopien ueber alle eigenen Decks
+      owned   -- Kopien im Bestand (alle Drucke zusammen)
+      missing -- needed - owned (nur Karten mit missing > 0)
+      decks   -- [(Deckname, Kopien), ...]"""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT dc.card_id, COALESCE(c.name_de, c.name) AS name,
+                      d.name AS deck, SUM(dc.quantity) AS copies,
+                      COALESCE((SELECT SUM(col.quantity) FROM collection col
+                                WHERE col.card_id = dc.card_id), 0) AS owned
+               FROM deck_cards dc
+               JOIN decks d ON d.deck_id = dc.deck_id
+               JOIN cards c ON c.id = dc.card_id
+               WHERE d.kind IS NULL
+               GROUP BY dc.card_id, dc.deck_id
+               ORDER BY COALESCE(c.name_de, c.name), d.name""",
+        ).fetchall()
+    cards: dict[int, dict] = {}
+    for r in rows:
+        entry = cards.setdefault(r["card_id"], {
+            "card_id": r["card_id"], "name": r["name"], "needed": 0,
+            "owned": r["owned"], "decks": [],
+        })
+        entry["needed"] += r["copies"]
+        entry["decks"].append((r["deck"], r["copies"]))
+    out = []
+    for entry in cards.values():
+        entry["missing"] = max(0, entry["needed"] - entry["owned"])
+        if entry["missing"]:
+            out.append(entry)
+    return out
+
+
 def card_bound_in_decks(db_path: str, card_id: int) -> int:
     """Wie viele Kopien einer Karte ueber alle EIGENEN Decks zusammen
     verplant sind (Referenz-Decks binden keinen physischen Bestand)."""

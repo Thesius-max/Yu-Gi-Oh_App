@@ -85,7 +85,7 @@ class E2ETestCase(QtTestCase):
 
     def table_names(self, view):
         return [view.table.item(r, 0).text() for r in range(view.table.rowCount())
-                if view._entry_id_at(r) is not None]
+                if view._card_id_at(r) is not None]
 
     def user_data(self):
         return {t: [tuple(r) for r in self.query(f"SELECT * FROM {t} ORDER BY 1, 2")]
@@ -155,14 +155,14 @@ class SearchCollectionFlowTests(E2ETestCase):
                             "(SELECT card_id FROM collection) AND id NOT IN "
                             "(SELECT card_id FROM deck_cards)")[0]
         name = self.display_name(cid)
-        entries = self.count("collection")
+        unique = self.scalar("SELECT COUNT(DISTINCT card_id) FROM collection")
         self.search_and_select(w, cid)
         self.assertEqual(w.detail.name.text(), name)
-        self.assertEqual(w.detail.owned.text(), "im Bestand: 0")
+        self.assertEqual(w.detail.coll_box.title(), "Sammlung — im Bestand: 0")
         w.detail.qty.setValue(2)
         self.click(w.detail, "Hinzufügen")
         self.click(w.detail, "Hinzufügen")               # gleicher Druck -> zusammengefuehrt
-        self.assertEqual(w.detail.owned.text(), "im Bestand: 4")
+        self.assertEqual(w.detail.coll_box.title(), "Sammlung — im Bestand: 4")
         self.assertEqual(self.scalar("SELECT COUNT(*) FROM collection WHERE card_id = ?", (cid,)), 1)
 
         # 'Nur meine Sammlung' findet die Karte jetzt.
@@ -173,7 +173,19 @@ class SearchCollectionFlowTests(E2ETestCase):
         # Tabwechsel -> Sammlung zeigt die neue Karte samt Summen.
         w.tabs.setCurrentWidget(w.collection_view)
         self.assertIn(name, self.table_names(w.collection_view))
-        self.assertTrue(w.collection_view.summary.text().startswith(f"{entries + 1} Einträge"))
+        self.assertTrue(w.collection_view.summary.text().startswith(
+            f"{unique + 1} verschiedene Karten"))
+
+        # Zweiter Druck (anderes Set) -> weiterhin EINE Zeile, Menge summiert.
+        self.search_and_select(w, cid)
+        w.detail.set_cb.setCurrentIndex(min(1, w.detail.set_cb.count() - 1))
+        w.detail.qty.setValue(1)
+        self.click(w.detail, "Hinzufügen")
+        w.tabs.setCurrentWidget(w.collection_view)
+        cv = w.collection_view
+        rows = [r for r in range(cv.table.rowCount()) if cv._card_id_at(r) == cid]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(cv.table.item(rows[0], 1).data(Qt.ItemDataRole.EditRole), 5)
 
     def test_filters_combine(self):
         w = self.window()
@@ -216,7 +228,7 @@ class SearchDeckFlowTests(E2ETestCase):
         self.assertEqual(ydb.deck_counts(self.db, deck), {"main": 3, "extra": 1, "side": 1})
         # Detail zeigt jetzt die Bindung im Deck (ohne Bestand -> Warnung).
         self.search_and_select(w, main)
-        self.assertEqual(w.detail.owned.text(), "im Bestand: 0  ·  in Decks: 3  ⚠")
+        self.assertEqual(w.detail.coll_box.title(), "Sammlung — im Bestand: 0  ·  in Decks: 3  ⚠")
 
         w.tabs.setCurrentWidget(w.deck_view)
         dv = w.deck_view
@@ -676,9 +688,9 @@ class SessionStateTests(E2ETestCase):
         self.assertEqual(cv2.filter_cat.currentData(), "monster")
         self.assertTrue(cv2.filter_untranslated.isChecked())
         shown = [cv2.table.item(r, 0).text() for r in range(cv2.table.rowCount())
-                 if cv2._entry_id_at(r) is not None]
-        expected = ydb.list_collection(self.db, text="Drache", category="monster",
-                                       untranslated_only=True)
+                 if cv2._card_id_at(r) is not None]
+        expected = ydb.list_collection_cards(self.db, text="Drache", category="monster",
+                                             untranslated_only=True)
         self.assertEqual(len(shown), len(expected))
 
     def test_missing_link_markers_hint(self):
@@ -720,6 +732,43 @@ class SessionStateTests(E2ETestCase):
         self.assertEqual(w.deck_view.deck_cb.currentText(), ydb.list_decks(self.db)[0]["name"])
         self.assertEqual(w.collection_view.filter_text.text(), "")
         self.assertEqual(w.playtest_view.rule_mode, "warn")
+
+
+class ShoppingAndCardLinkFlowTests(E2ETestCase):
+    def test_shopping_list_from_deck_tab(self):
+        w = self.window()
+        cid = self.unowned_ids(1)[0]
+        deck = ydb.create_deck(self.db, "Wunschdeck")
+        ydb.add_card_to_deck(self.db, deck, cid, count=2)
+        w.tabs.setCurrentWidget(w.deck_view)
+        base = os.path.join(self._dir, "einkauf")
+
+        def check(dlg):
+            ids = [dlg.table.item(r, 0).data(UR) for r in range(dlg.table.rowCount())]
+            self.assertIn(cid, ids)
+            self.assertIn("fehlende Kopie", dlg.summary.text())
+            self.ui.save_paths.append((base, "CSV für Excel (*.csv)"))
+            dlg._export()
+            dlg._open_card(ids.index(cid), 0)        # Doppelklick -> Kartendetails
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["ShoppingListDialog"] = check
+        self.click(w.deck_view, "Einkaufsliste…")
+        with open(base + ".csv", encoding="utf-8-sig") as fh:
+            self.assertTrue(fh.read().startswith("Fehlt;Name;"))
+        self.assertTrue(w._card_dialog.isVisible())
+        self.assertEqual(w._card_dialog.current_id, cid)
+        w._card_dialog.close()
+
+    def test_rulebook_card_link_opens_details(self):
+        from PySide6.QtCore import QUrl
+        w = self.window()
+        w.tabs.setCurrentWidget(w.rulebook_view)
+        w.rulebook_view.show_section("kartentext")
+        w.rulebook_view._on_link(QUrl("card:14558127"))
+        self.assertTrue(w._card_dialog.isVisible())
+        self.assertEqual(w._card_dialog.current_id, 14558127)
+        self.assertIs(w.tabs.currentWidget(), w.rulebook_view)  # Tab bleibt
+        w._card_dialog.close()
 
 
 if __name__ == "__main__":

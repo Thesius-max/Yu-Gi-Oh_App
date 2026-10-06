@@ -421,7 +421,7 @@ class DetailPanelTests(QtTestCase):
         cid = self.unowned_ids(1)[0]
         panel.show_card(CardRepository(self.db).get_card(cid))
         self.assertTrue(panel.add_btn.isEnabled())
-        self.assertEqual(panel.owned.text(), "im Bestand: 0")
+        self.assertEqual(panel.coll_box.title(), "Sammlung — im Bestand: 0")
 
     def test_add_to_collection_and_bound_warning(self):
         repo = CardRepository(self.db)
@@ -430,10 +430,10 @@ class DetailPanelTests(QtTestCase):
         deck = ydb.create_deck(self.db, "T")
         ydb.add_card_to_deck(self.db, deck, cid, count=3)
         panel.show_card(repo.get_card(cid))
-        self.assertEqual(panel.owned.text(), "im Bestand: 0  ·  in Decks: 3  ⚠")
+        self.assertEqual(panel.coll_box.title(), "Sammlung — im Bestand: 0  ·  in Decks: 3  ⚠")
         panel.qty.setValue(3)
         QTest.mouseClick(panel.add_btn, Qt.MouseButton.LeftButton)
-        self.assertEqual(panel.owned.text(), "im Bestand: 3  ·  in Decks: 3")
+        self.assertEqual(panel.coll_box.title(), "Sammlung — im Bestand: 3  ·  in Decks: 3")
         self.assertEqual(repo.owned_count(cid), 3)
 
     def test_callbacks(self):
@@ -793,6 +793,60 @@ class RulebookAndCardHelpTests(QtTestCase):
             d.browser.toPlainText()) or QDialog.DialogCode.Accepted
         dlg._open_wording()
         self.assertIn("Kosten", seen[0])
+
+
+class CollectionPrintAndLinkTests(QtTestCase):
+    ASH = 14558127
+
+    def setUp(self):
+        super().setUp()
+        from yugioh_gui import navigation
+        self.nav = navigation
+        self.addCleanup(navigation.set_card_opener, None)
+
+    def test_detail_panel_adds_with_set_and_language(self):
+        repo = CardRepository(self.db)
+        panel = self.track(carddetail.DetailPanel(repo))
+        panel.show_card(repo.get_card(self.ASH))
+        self.assertEqual(panel.set_cb.itemText(0), "(ohne Set)")
+        self.assertEqual(panel.lang_cb.currentData(), "DE")
+        idx = next(i for i in range(panel.set_cb.count())
+                   if panel.set_cb.itemData(i) == "RA01-DE008")
+        panel.set_cb.setCurrentIndex(idx)
+        panel.lang_cb.setCurrentIndex(panel.lang_cb.findData("EN"))
+        self.assertEqual(panel.set_cb.currentData(), "RA01-EN008")   # Auswahl bleibt
+        before = repo.owned_count(self.ASH)
+        panel.qty.setValue(2)
+        panel._add_to_collection()
+        self.assertEqual(self.scalar(
+            "SELECT quantity FROM collection WHERE card_id = ? AND set_code = 'RA01-EN008' "
+            "AND language = 'EN'", (self.ASH,)), 2)
+        self.assertIn(f"im Bestand: {before + 2}", panel.coll_box.title())
+        panel.show_card(repo.get_card(self.main_ids(1)[0]))         # neue Karte
+        self.assertEqual(panel.set_cb.currentIndex(), 0)
+
+    def test_doc_links_open_cards_and_chapters(self):
+        from PySide6.QtCore import QUrl
+        from yugioh_gui.rulebook import RulebookView
+        calls = []
+        self.nav.set_card_opener(calls.append)
+        view = self.track(RulebookView())
+        view._on_link(QUrl(f"card:{self.ASH}"))
+        self.assertEqual(calls, [self.ASH])
+        view._on_link(QUrl("rulebook:kampf"))
+        self.assertEqual(view.current_key(), "kampf")
+        with mock.patch("yugioh_gui.docview.QDesktopServices.openUrl") as open_url:
+            view._on_link(QUrl("https://example.org"))
+            open_url.assert_called_once()
+
+    def test_all_rulebook_card_links_exist(self):
+        import re as _re
+        from yugioh_gui.rulebook_text import RULEBOOK_SECTIONS
+        ids = {int(m) for _k, _t, md in RULEBOOK_SECTIONS
+               for m in _re.findall(r"\(card:(\d+)\)", md)}
+        self.assertGreaterEqual(len(ids), 5)
+        for cid in ids:
+            self.assertIsNotNone(CardRepository(self.db).get_card(cid), cid)
 
 
 if __name__ == "__main__":
