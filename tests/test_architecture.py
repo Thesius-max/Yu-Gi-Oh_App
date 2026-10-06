@@ -65,7 +65,7 @@ class DataLayerTests(unittest.TestCase):
 
 
 class GuiLayerTests(unittest.TestCase):
-    VIEWS = {"collection", "deck", "combos", "playtest", "manual", "rulebook"}
+    VIEWS = {"search", "collection", "deck", "combos", "playtest", "manual", "rulebook"}
 
     def test_views_do_not_import_each_other(self):
         for view in self.VIEWS:

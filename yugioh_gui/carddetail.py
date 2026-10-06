@@ -24,7 +24,10 @@ import yugioh_db as ydb
 
 from . import navigation
 from .images import CardImageView
-from .labels import ATTR_DE, RACE_DE, TYPE_DE
+from .labels import (
+    ATTR_DE, card_kind_text, is_monster, level_text, link_arrows_text,
+    typeline_text,
+)
 from .repository import CardRepository
 from .rulebook_text import section_title
 from .theme import WORDING_COLORS
@@ -83,28 +86,41 @@ class CardSearchDialog(QDialog):
 # Detailansicht (rechte Spalte)
 # ---------------------------------------------------------------------------
 
-def _format_card_stats(card) -> str:
-    """Karten-Stat-Zeile mit deutscher Beschriftung (Typ • Sorte • Attribut •
-    Stufe • ATK/DEF • Archetyp). Geteilt von DetailPanel und CardDetailDialog."""
-    parts = []
-    if card["type"]:
-        parts.append(TYPE_DE.get(card["type"], card["type"]))
-    if card["race"]:
-        parts.append(RACE_DE.get(card["race"], card["race"]))
-    if card["attribute"]:
-        parts.append(ATTR_DE.get(card["attribute"], card["attribute"]))
-    if card["level"] is not None:
-        parts.append(f"Stufe {card['level']}")
-    if card["atk"] is not None or card["def"] is not None:
-        atk = card["atk"] if card["atk"] is not None else "—"
-        # Link-Monster haben keine DEF (def ist NULL) -> nicht "None" anzeigen.
-        if card["def"] is not None:
-            parts.append(f"ATK {atk} / DEF {card['def']}")
+def _format_card_stats(card, set_count: int | None = None) -> str:
+    """Kartendaten in der Reihenfolge der Karte, eine Zeile je Bereich:
+    Eigenschaft + Stufe/Rang, Typzeile, ATK/DEF bzw. ATK/LINK mit Pfeilen,
+    Pendelskala, Kartennummer (+ Anzahl Sets) und Archetyp. Zauber/Fallen:
+    Kartentyp mit Symbol. Geteilt von DetailPanel und CardDetailDialog."""
+    lines = []
+    if is_monster(card):
+        # Link-Monster tragen keine Sterne; ihr Linkwert steht unten bei ATK.
+        head = [ATTR_DE.get(card["attribute"], card["attribute"] or ""),
+                "" if card["frame_type"] == "link" else level_text(card)]
+        lines.append("  ·  ".join(p for p in head if p))
+        if typeline_text(card):
+            lines.append(typeline_text(card))
+        atk = "?" if card["atk"] is None else card["atk"]
+        if card["frame_type"] == "link":
+            stat = f"ATK {atk} / LINK-{card['link_value']}"
+            arrows = link_arrows_text(card)
+            if arrows:
+                stat += f"   {arrows}"
         else:
-            parts.append(f"ATK {atk}")
+            dfn = "?" if card["def"] is None else card["def"]
+            stat = f"ATK {atk} / DEF {dfn}"
+        lines.append(stat)
+        if card["scale"] is not None:
+            lines.append(f"Pendelskala {card['scale']}")
+    else:
+        lines.append(card_kind_text(card).replace("Zauber ·", "Zauberkarte ·")
+                     .replace("Falle ·", "Fallenkarte ·"))
+    foot = [f"Kartennummer {card['id']:08d}"]
+    if set_count:
+        foot.append(f"in {set_count} Set{'s' if set_count != 1 else ''}")
     if card["archetype"]:
-        parts.append(f"Archetyp: {card['archetype']}")
-    return "  •  ".join(parts)
+        foot.append(f"Archetyp: {card['archetype']}")
+    lines.append("  ·  ".join(foot))
+    return "\n".join(lines)
 
 
 def edit_card_translation(repo: "CardRepository", card_id: int, parent) -> bool:
@@ -457,6 +473,7 @@ class _CardHelpMixin:
 
 class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
     rulings_changed = Signal()
+    collection_changed = Signal(int)     # card_id nach '+ Sammlung'
 
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -576,7 +593,8 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
     def show_card(self, card) -> None:
         self.current_id = card["id"]
         self.name.setText(card["name_de"] or card["name"])
-        self.stats.setText(_format_card_stats(card))
+        self.stats.setText(
+            _format_card_stats(card, self.repo.set_count(card["id"])))
         self.text.setPlainText(card["desc_de"] or card["description"] or "")
 
         self._load_image(card["id"])
@@ -604,6 +622,7 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
             set_code=code, language=lang,
         )
         self._update_owned(self.current_id)
+        self.collection_changed.emit(self.current_id)
 
 
 class CardDetailDialog(_CardHelpMixin, CardImageView, QDialog):
@@ -674,7 +693,7 @@ class CardDetailDialog(_CardHelpMixin, CardImageView, QDialog):
         title = card["name_de"] or card["name"]
         self.setWindowTitle(title)
         self.name.setText(title)
-        self.stats.setText(_format_card_stats(card))
+        self.stats.setText(_format_card_stats(card, self.repo.set_count(card_id)))
         self.text.setPlainText(card["desc_de"] or card["description"] or "")
         self._update_rulings_btn()
         self._load_image(card_id)

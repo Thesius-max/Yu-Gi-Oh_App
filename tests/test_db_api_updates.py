@@ -179,6 +179,35 @@ class FullUpdateTests(DevDbTestCase):
         self.assertEqual(self.scalar(sql, (link,)), self.REAL_LINK_MARKERS[link])
         self.assertIsNone(self.scalar(sql, (self.main_ids(1)[0],)))
 
+    def test_typeline_is_stored_and_survives_updates(self):
+        sql = "SELECT typeline FROM cards WHERE id = ?"
+        cards, de = api_payload_from_db(self.db)
+        for c in cards:
+            if c["id"] in self.REAL_TYPELINES:
+                self.assertIsNone(c["typeline"])         # Dev-DB: noch leer
+                c["typeline"] = self.REAL_TYPELINES[c["id"]].split(",")
+        gaps = ydb.card_data_gaps(self.db)
+        self.assertEqual(gaps["typeline"], self.count("cards", "type LIKE '%Monster%'"))
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        for cid, line in self.REAL_TYPELINES.items():
+            self.assertEqual(self.scalar(sql, (cid,)), line)
+        self.assertEqual(ydb.card_data_gaps(self.db)["typeline"],
+                         gaps["typeline"] - len(self.REAL_TYPELINES))
+        # Zweiter Lauf aus der aktualisierten DB: Typzeilen bleiben (UPSERT).
+        cards, de = api_payload_from_db(self.db)
+        with fake_api(cards, de):
+            ydb.build_database(self.db)
+        self.assertEqual(self.scalar(sql, (14558127,)), "Zombie,Tuner,Effect")
+        self.assertIsNone(self.scalar(sql, (12580477,)))      # Zauber: keine Typzeile
+
+    def test_card_data_gaps_lists_link_markers_too(self):
+        gaps = ydb.card_data_gaps(self.db)
+        self.assertEqual(gaps["link_markers"], ydb.link_markers_missing(self.db))
+        self.set_real_link_markers()
+        self.assertEqual(ydb.card_data_gaps(self.db)["link_markers"],
+                         gaps["link_markers"] - len(self.REAL_LINK_MARKERS))
+
     def test_set_names_are_unescaped(self):
         cards, de = api_payload_from_db(self.db)
         hit = next(c for c in cards for s in c["card_sets"]

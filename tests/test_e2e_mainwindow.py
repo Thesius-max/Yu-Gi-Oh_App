@@ -31,7 +31,7 @@ if HAS_QT:
         QDialog, QLineEdit, QListWidget, QMessageBox, QPushButton
     )
 
-    from yugioh_gui import mainwindow
+    from yugioh_gui import mainwindow, search
     from yugioh_gui.mainwindow import MainWindow
 
 UR = 0x0100  # Qt.ItemDataRole.UserRole
@@ -77,11 +77,17 @@ class E2ETestCase(QtTestCase):
         raise AssertionError(f"{data} nicht in der Liste {listw}")
 
     def search_and_select(self, w, card_id: int) -> None:
-        w.tabs.setCurrentIndex(0)
-        w.search_box.setText(self.display_name(card_id))
-        QTest.keyClick(w.search_box, Qt.Key.Key_Return)
-        self.select_data(w.results, card_id)
+        sv = w.search_view
+        w.tabs.setCurrentWidget(sv)
+        sv.search_box.setText(self.display_name(card_id))
+        QTest.keyClick(sv.search_box, Qt.Key.Key_Return)
+        self.assertTrue(sv.select_card(card_id))
         self.assertEqual(w.detail.current_id, card_id)
+
+    @staticmethod
+    def chip(chips, key):
+        """Filter-Chip mit diesem Schluessel (z. B. 'synchro', 'DARK')."""
+        return next(c for c in chips if c.property("key") == key)
 
     def table_names(self, view):
         return [view.table.item(r, 0).text() for r in range(view.table.rowCount())
@@ -105,10 +111,11 @@ class StartupTests(E2ETestCase):
         self.assertEqual([w.tabs.tabText(i) for i in range(w.tabs.count())],
                          ["Suche", "Sammlung", "Deck", "Spielfeld", "Kombos", "Regelwerk",
                           "Handbuch"])
-        self.assertEqual(w.results.count(), 300)
-        self.assertEqual(w.count_label.text(), "300 Treffer")
-        self.assertEqual(w.type_cb.count(), 1 + len(w.repo.distinct("type")))
-        self.assertEqual(w.type_cb.itemText(w.type_cb.findData("Spell Card")), "Zauberkarte")
+        sv = w.search_view
+        self.assertEqual(sv.table.rowCount(), 300)
+        self.assertEqual(sv.count_label.text(), "300+ Treffer – Suche eingrenzen")
+        self.assertEqual(sv.race_cb.count(), 1 + len(w.repo.monster_races()))
+        self.assertEqual(sv.race_cb.itemText(sv.race_cb.findData("Spellcaster")), "Hexer")
         # Zweiter Start derselben Version: keine weitere Sicherung.
         os.remove(self.db + ".bak-v0.8.0")
         self.window()
@@ -118,7 +125,7 @@ class StartupTests(E2ETestCase):
         missing = os.path.join(self._dir, "gibt-es-nicht.sqlite3")
         w = self.window(missing)
         self.assertEqual(self.ui.titles(), ["Datenbank fehlt"])
-        self.assertEqual(w.results.count(), 0)
+        self.assertEqual(w.search_view.table.rowCount(), 0)
         self.assertEqual(w.collection_view.summary.text(), "Keine Datenbank vorhanden.")
         self.assertIn("Kein Deck ausgewählt", w.deck_view.status.text())
         for i in range(w.tabs.count()):                 # jeder Tab laesst sich oeffnen
@@ -130,7 +137,7 @@ class StartupTests(E2ETestCase):
             w = self.window()
         self.assertEqual(self.ui.titles("warning"), ["Sicherung fehlgeschlagen"])
         self.assertIn("Platte voll", self.ui.last_text())
-        self.assertEqual(w.results.count(), 300)            # App laeuft trotzdem
+        self.assertEqual(w.search_view.table.rowCount(), 300)   # App laeuft trotzdem
 
     def test_packaged_start_without_seed_warns(self):
         missing = os.path.join(self._dir, "fehlt.sqlite3")
@@ -143,8 +150,12 @@ class StartupTests(E2ETestCase):
         w = self.window()
         link = self.pick_ids("frame_type = 'link' AND atk IS NOT NULL")[0]
         self.search_and_select(w, link)
-        item = w.results.currentItem()
-        self.assertRegex(item.text(), r"\[ATK \d+\]$")
+        sv = w.search_view
+        row = sv.table.currentRow()
+        self.assertEqual(sv.table.item(row, search.COL_DEF).text(), "–")
+        self.assertRegex(sv.table.item(row, search.COL_LEVEL).text(), r"^L\d$")
+        self.assertIn("LINK-", w.detail.stats.text())
+        self.assertNotIn("DEF", w.detail.stats.text())
         self.assertNotIn("None", w.detail.stats.text())
 
 
@@ -163,12 +174,14 @@ class SearchCollectionFlowTests(E2ETestCase):
         self.click(w.detail, "Hinzufügen")
         self.click(w.detail, "Hinzufügen")               # gleicher Druck -> zusammengefuehrt
         self.assertEqual(w.detail.coll_box.title(), "Sammlung — im Bestand: 4")
+        sv = w.search_view                                 # Bestand-Spalte sofort
+        self.assertEqual(sv.table.item(sv.table.currentRow(), search.COL_OWNED).text(), "4")
         self.assertEqual(self.scalar("SELECT COUNT(*) FROM collection WHERE card_id = ?", (cid,)), 1)
 
         # 'Nur meine Sammlung' findet die Karte jetzt.
-        w.only_coll.setChecked(True)
-        w.search()
-        self.assertIn(cid, [w.results.item(i).data(UR) for i in range(w.results.count())])
+        w.search_view.only_coll.setChecked(True)
+        w.search_view.search()
+        self.assertIn(cid, w.search_view.result_ids())
 
         # Tabwechsel -> Sammlung zeigt die neue Karte samt Summen.
         w.tabs.setCurrentWidget(w.collection_view)
@@ -189,20 +202,90 @@ class SearchCollectionFlowTests(E2ETestCase):
 
     def test_filters_combine(self):
         w = self.window()
-        w.type_cb.setCurrentIndex(w.type_cb.findData("Effect Monster"))
-        w.attr_cb.setCurrentIndex(w.attr_cb.findData("DARK"))
-        w.level_cb.setCurrentIndex(w.level_cb.findData(4))
-        w.atk_min.setValue(1500)
-        self.click(w, "Suchen")
-        ids = [w.results.item(i).data(UR) for i in range(w.results.count())]
+        sv = w.search_view
+        sv.set_kind("monster")
+        self.chip(sv.frame_chips, "synchro").setChecked(True)
+        self.chip(sv.frame_chips, "xyz").setChecked(True)      # ODER innerhalb
+        self.chip(sv.attr_chips, "DARK").setChecked(True)      # UND zwischen
+        sv.level_min.setValue(4)
+        sv.level_max.setValue(8)
+        sv.atk_min.setValue(2000)
+        QTest.keyClick(sv.search_box, Qt.Key.Key_Return)
+        ids = sv.result_ids()
         self.assertTrue(ids)
         placeholders = ",".join("?" * len(ids))
         bad = self.scalar(
             f"SELECT COUNT(*) FROM cards WHERE id IN ({placeholders}) AND NOT "
-            "(type = 'Effect Monster' AND attribute = 'DARK' AND level = 4 AND atk >= 1500)",
-            ids)
+            "((frame_type LIKE 'synchro%' OR frame_type LIKE 'xyz%') AND attribute = 'DARK' "
+            "AND level BETWEEN 4 AND 8 AND atk >= 2000)", ids)
         self.assertEqual(bad, 0)
-        self.assertEqual(w.count_label.text(), f"{len(ids)} Treffer")
+        expected = self.scalar(
+            "SELECT COUNT(*) FROM cards WHERE (frame_type LIKE 'synchro%' OR frame_type "
+            "LIKE 'xyz%') AND attribute = 'DARK' AND level BETWEEN 4 AND 8 AND atk >= 2000")
+        self.assertEqual(len(ids), min(expected, search.RESULT_LIMIT))
+        self.assertIn(f"{len(ids)}", sv.count_label.text())
+
+        # Kartenart wechseln: die Monster-Filter sind ausgeblendet und wirken nicht.
+        sv.set_kind("spell")
+        self.assertFalse(sv.monster_box.isVisible())
+        self.assertTrue(sv.spell_box.isVisible())
+        self.chip(sv.spell_chips, "Quick-Play").setChecked(True)
+        sv.search()
+        ids = sv.result_ids()
+        self.assertTrue(ids)
+        self.assertEqual(self.scalar(
+            f"SELECT COUNT(*) FROM cards WHERE id IN ({','.join('?' * len(ids))}) "
+            "AND NOT (type = 'Spell Card' AND race = 'Quick-Play')", ids), 0)
+        # Zuruecksetzen: alles wieder 'egal' (Chips, Bereiche, Kartenart).
+        self.click(w.search_view, "Filter zurücksetzen")
+        self.assertEqual(sv.kind(), "all")
+        self.assertFalse(any(c.isChecked() for c in sv.frame_chips + sv.spell_chips))
+        self.assertIsNone(sv.filters()["kind"])
+        self.assertEqual(sv.table.rowCount(), search.RESULT_LIMIT)
+
+    def test_passcode_and_set_number_search(self):
+        w = self.window()
+        sv = w.search_view
+        for text in ("14558127", "RA01-DE008", "ra01-en008"):
+            sv.search_box.setText(text)
+            QTest.keyClick(sv.search_box, Qt.Key.Key_Return)
+            self.assertEqual(sv.result_ids()[:1], [14558127], text)
+        sv.table.selectRow(0)
+        self.assertEqual(w.detail.current_id, 14558127)
+        self.assertIn("Kartennummer 14558127", w.detail.stats.text())
+
+    def test_sorting_by_atk_and_stripe(self):
+        w = self.window()
+        sv = w.search_view
+        sv.set_kind("monster")
+        sv.search()
+        sv.table.sortItems(search.COL_ATK, Qt.SortOrder.DescendingOrder)
+        atks = [sv.table.item(r, search.COL_ATK).data(search.SORT_ROLE)
+                for r in range(sv.table.rowCount())]
+        self.assertEqual(atks, sorted(atks, reverse=True))
+        # Sortiert wird in SQL ueber ALLE Monster, nicht nur ueber die ersten 300.
+        self.assertEqual(atks[0], self.scalar(
+            "SELECT MAX(atk) FROM cards WHERE type LIKE '%Monster%'"))
+        self.assertEqual(sv.table.rowCount(), search.RESULT_LIMIT)
+        # Neuer Suchtext: wieder Relevanz statt der Benutzer-Sortierung.
+        sv.search_box.setText("Ash Blossom")
+        self.assertIsNone(sv._order())
+        sv.search_box.clear()
+        sv.table.sortItems(search.COL_ATK, Qt.SortOrder.DescendingOrder)
+        frames = {sv.table.item(r, search.COL_STRIPE).data(search.FRAME_ROLE)
+                  for r in range(sv.table.rowCount())}
+        self.assertFalse(frames & {"spell", "trap"})
+        # Auswahl bleibt ueber das Sortieren erhalten (solange die Karte unter
+        # den Treffern ist -- hier eine Auswahl unter 300).
+        self.chip(sv.frame_chips, "synchro").setChecked(True)
+        self.chip(sv.attr_chips, "DARK").setChecked(True)
+        sv.search()
+        self.assertLess(sv.table.rowCount(), search.RESULT_LIMIT)
+        sv.table.selectRow(5)
+        chosen = sv.current_card_id()
+        sv.table.sortItems(search.COL_NAME, Qt.SortOrder.AscendingOrder)
+        self.assertEqual(sv.current_card_id(), chosen)
+        self.assertEqual(w.detail.current_id, chosen)
 
 
 class SearchDeckFlowTests(E2ETestCase):
@@ -444,9 +527,9 @@ class TranslationFlowTests(E2ETestCase):
         self.click(w.detail, "✎ DE")
         self.assertEqual(w.detail.name.text(), "E2E Übersetzung")
 
-        w.search_box.setText("E2E Übersetzung")
-        self.click(w, "Suchen")
-        self.assertEqual([w.results.item(i).data(UR) for i in range(w.results.count())], [cid])
+        w.search_view.search_box.setText("E2E Übersetzung")
+        w.search_view.search()
+        self.assertEqual(w.search_view.result_ids(), [cid])
         w.tabs.setCurrentWidget(w.collection_view)
         self.assertIn("E2E Übersetzung", self.table_names(w.collection_view))
         self.assertIn(f"{before - 1} ohne deutsche Übersetzung",
@@ -490,8 +573,8 @@ class DataMenuFlowTests(E2ETestCase):
                          ("information", "Aktualisierung",
                           f"{n_cards} Karten aktualisiert (Datenbank-Version 999.1)."))
         self.assertEqual(self.user_data(), before)
-        self.assertEqual(w.type_cb.count(), 1 + len(w.repo.distinct("type")))
-        self.assertEqual(w.results.count(), 300)
+        self.assertEqual(w.search_view.race_cb.count(), 1 + len(w.repo.monster_races()))
+        self.assertEqual(w.search_view.table.rowCount(), 300)
 
     def test_broken_api_answer_changes_nothing(self):
         w = self.window()
@@ -625,19 +708,25 @@ class RulebookFlowTests(E2ETestCase):
 class SearchFilterFlowTests(E2ETestCase):
     def test_find_handtraps_by_wording_and_filter_tuners(self):
         w = self.window()
-        w._search_timer.stop()
-        w.wording_cb.setCurrentIndex(w.wording_cb.findData("handtrap"))
-        w.trait_cb.setCurrentIndex(w.trait_cb.findData("tuner"))
-        w.search()                                  # berechnet Merkmale einmalig
-        ids = [w.results.item(i).data(UR) for i in range(w.results.count())]
+        sv = w.search_view
+        sv.wording_cb.setCurrentIndex(sv.wording_cb.findData("handtrap"))
+        sv.set_kind("monster")
+        self.chip(sv.trait_chips, "tuner").setChecked(True)
+        sv.search()                                 # berechnet Merkmale einmalig
+        ids = sv.result_ids()
         self.assertIn(14558127, ids)                # Ash Blossom: Empfaenger + Handtrap
         self.assertNotIn(10045474, ids)             # Imperm: Handtrap, aber kein Tuner
-        self.assertEqual(w.count_label.text(), f"{len(ids)} Treffer")
-        w.race_cb.setCurrentIndex(w.race_cb.findData("Zombie"))
-        self.assertEqual(w.race_cb.currentData(), "Zombie")      # Anzeige deutsch
-        w.search()
-        self.assertIn(14558127, [w.results.item(i).data(UR)
-                                 for i in range(w.results.count())])
+        self.assertEqual(sv.count_label.text(), f"{len(ids)} Treffer")
+        sv.race_cb.setCurrentIndex(sv.race_cb.findData("Zombie"))
+        self.assertEqual(sv.race_cb.currentText(), "Zombie")
+        sv.search()
+        self.assertIn(14558127, sv.result_ids())
+        # Archetyp per Eingabe (Gross-/Kleinschreibung egal), Unbekanntes = egal
+        sv.set_kind("all")
+        sv.arch_cb.setEditText("sky striker")
+        self.assertEqual(sv.archetype(), "Sky Striker")
+        sv.arch_cb.setEditText("gibt es nicht")
+        self.assertIsNone(sv.archetype())
 
 
 class SessionStateTests(E2ETestCase):
@@ -706,7 +795,24 @@ class SessionStateTests(E2ETestCase):
             w._hint_missing_link_markers()                   # fragt nicht mehr
             self.assertEqual(len(self.ui.titles("question")), asked)
             self.assertEqual(start.call_count, 1)
-        self.assertEqual(self.ui.titles("question"), ["Link-Pfeile fehlen"] * 2)
+        self.assertEqual(self.ui.titles("question"), ["Kartendaten unvollständig"] * 2)
+        self.assertIn("Link-Pfeile", self.ui.messages[0][2])
+
+    def test_card_data_hint_asks_again_for_a_new_gap(self):
+        # Wer frueher nur die Link-Pfeile abgelehnt hat (alter Schluessel),
+        # wird zu den neu fehlenden Typzeilen trotzdem einmal gefragt.
+        QSettings().setValue("hints/link_markers_declined", True)
+        w = self.window()
+        self.assertGreater(ydb.card_data_gaps(self.db)["typeline"], 0)
+        self.ui.question = QMessageBox.StandardButton.No
+        with mock.patch.object(w, "_start_update") as start:
+            w._hint_missing_link_markers()
+            w._hint_missing_link_markers()                   # jetzt gemerkt
+            start.assert_not_called()
+        self.assertEqual(self.ui.titles("question"), ["Kartendaten unvollständig"])
+        self.assertIn("Typzeilen", self.ui.last_text())
+        self.assertEqual(sorted(QSettings().value("hints/card_data_declined", type=list)),
+                         ["link_markers", "typeline"])
 
     def test_tab_is_restored_by_title_and_legacy_index(self):
         w = self.window()

@@ -188,6 +188,19 @@ QToolTip {
 #HeldCard { border: 2px solid #d4af37; }
 #ZonePlaceholder { color: #5b5273; }
 #PileCaption { color: #cfc6e0; font-size: 9px; }
+
+/* Suche: Kartenart-Umschalter (Segment) und Filter-Chips */
+QPushButton#Segment { border-radius: 0; padding: 4px 6px; }
+QPushButton#Segment:checked {
+    background: #d4af37; color: #1a1426; border-color: #d4af37; font-weight: bold;
+}
+QPushButton#Chip {
+    background: #1f1830; color: #cfc6e0; border: 1px solid #3a2f4d;
+    border-radius: 10px; padding: 2px 6px; font-size: 9pt;
+}
+QPushButton#Chip:hover { border-color: #d4af37; }
+QPushButton#Chip:checked { background: #4a3d5e; color: #f5e8b8; border-color: #d4af37; }
+#FilterCaption { color: #9b90b5; font-size: 9pt; }
 """
 
 
@@ -210,3 +223,13 @@ WORDING_COLORS = {
     "condition": _GOLD, "cost": "#7fd18b", "effect": "#8fc7ff",
     "limit": "#c79bff", "plain": _TEXT,
 }
+
+# Rahmenfarbe je Kartenart (Farbstreifen in der Trefferliste). Pendel:
+# oben die Farbe der Monsterart, unten Zauber-Gruen (wie auf der Karte).
+FRAME_COLORS = {
+    "normal": "#d9b15f", "effect": "#c8692f", "ritual": "#4f7fd0",
+    "fusion": "#9a5ab8", "synchro": "#e6e6e6", "xyz": "#0c0c0c",
+    "link": "#2c6bb3", "spell": "#1d9a87", "trap": "#b0407c",
+    "token": "#8c8c8c", "skill": "#3d6aa6",
+}
+PENDULUM_COLOR = FRAME_COLORS["spell"]

@@ -196,3 +196,15 @@ def ensure_wording_flags(db_path: str) -> int:
         )
         conn.commit()
         return len(rows)
+
+
+def card_data_gaps(db_path: str) -> dict[str, int]:
+    """Was den Kartendaten fehlt, weil sie aelter als die App-Version sind:
+    {'link_markers': Link-Monster ohne Pfeile, 'typeline': Monster ohne
+    Typzeile}. Beides kommt mit dem naechsten Kartendaten-Update."""
+    with _conn(db_path) as conn:
+        typeline = conn.execute(
+            "SELECT COUNT(*) FROM cards WHERE typeline IS NULL "
+            "AND type LIKE '%Monster%'"
+        ).fetchone()[0]
+    return {"link_markers": link_markers_missing(db_path), "typeline": typeline}

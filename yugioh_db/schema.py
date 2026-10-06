@@ -72,8 +72,10 @@ CREATE TABLE IF NOT EXISTS cards (
     link_value  INTEGER,               -- Link-Wert (sonst NULL)
     link_markers TEXT,                 -- Link-Pfeile, kommagetrennt wie die
                                        -- API ('Top,Bottom-Left'; sonst NULL)
-    wording_flags TEXT                 -- Wortlaut-Merkmale ',quick,handtrap,'
+    wording_flags TEXT,                -- Wortlaut-Merkmale ',quick,handtrap,'
                                        -- (abgeleitet, cards.ensure_wording_flags)
+    typeline    TEXT                   -- Typzeile wie auf der Karte, kommagetrennt
+                                       -- wie die API ('Dragon,Synchro,Effect')
 );
 
 CREATE INDEX IF NOT EXISTS idx_cards_type      ON cards(type);
@@ -234,6 +236,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("cards", "desc_de", "TEXT"),
         ("cards", "link_markers", "TEXT"),
         ("cards", "wording_flags", "TEXT"),
+        ("cards", "typeline", "TEXT"),
         ("combos", "boss_card_id", "INTEGER REFERENCES cards(id)"),
         ("combos", "deck_id", "INTEGER REFERENCES decks(deck_id) ON DELETE SET NULL"),
         ("combos", "parent_combo_id",

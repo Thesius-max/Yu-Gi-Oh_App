@@ -154,3 +154,110 @@ RACE_DE: dict[str, str] = {
 
 
 ZONE_LABELS = {"main": "Main Deck", "extra": "Extra Deck", "side": "Side Deck"}
+
+
+# ---------------------------------------------------------------------------
+# Kartenaufbau: Typzeile, Stufe/Rang/Link, Symbole (Suche + Detailansicht)
+# ---------------------------------------------------------------------------
+
+# Begriffe der Typzeile ([Drache/Synchro/Effekt]) ausser dem Typ selbst.
+TYPELINE_DE: dict[str, str] = {
+    "Normal": "Normal", "Effect": "Effekt", "Tuner": "Empfänger",
+    "Flip": "Flipp", "Gemini": "Zwilling", "Spirit": "Spirit",
+    "Union": "Union", "Toon": "Toon", "Ritual": "Ritual", "Fusion": "Fusion",
+    "Synchro": "Synchro", "XYZ": "Xyz", "Xyz": "Xyz", "Link": "Link",
+    "Pendulum": "Pendel",
+}
+# Symbol der Zauber-/Fallenkarte (API: 'race').
+SPELL_KIND_DE: dict[str, str] = {
+    "Normal": "Normal", "Quick-Play": "Schnell", "Continuous": "Permanent",
+    "Equip": "Ausrüstung", "Field": "Feld", "Ritual": "Ritual",
+}
+TRAP_KIND_DE: dict[str, str] = {
+    "Normal": "Normal", "Continuous": "Permanent", "Counter": "Konter",
+}
+# Link-Pfeile im Uhrzeigersinn ab oben links.
+LINK_ARROWS: dict[str, str] = {
+    "Top-Left": "↖", "Top": "↑", "Top-Right": "↗", "Right": "→",
+    "Bottom-Right": "↘", "Bottom": "↓", "Bottom-Left": "↙", "Left": "←",
+}
+# Reihenfolge der Typzeilen-Begriffe auf der Karte (Rueckfall ohne 'typeline').
+_TYPELINE_ORDER = ("Ritual", "Fusion", "Synchro", "XYZ", "Link", "Pendulum",
+                   "Flip", "Gemini", "Spirit", "Toon", "Union", "Tuner")
+
+
+def _col(card, key):
+    """Spalte einer Kartenzeile oder None (aeltere Zeilen ohne die Spalte)."""
+    try:
+        return card[key]
+    except (IndexError, KeyError):
+        return None
+
+
+def is_monster(card) -> bool:
+    return "Monster" in (card["type"] or "")
+
+
+def typeline_parts(card) -> list[str]:
+    """Typzeile wie auf der Karte, deutsch: ['Drache', 'Synchro', 'Effekt'].
+    Quelle ist die API-Typzeile; fehlt sie (Kartendaten vor dem Update),
+    wird sie aus 'type' hergeleitet -- 'Effekt' dann nur, wenn er sicher ist
+    (Extra-Deck-Monster nennen ihn in 'type' nicht immer)."""
+    if not is_monster(card):
+        return []
+    raw = _col(card, "typeline")
+    if raw:
+        tokens = raw.split(",")
+        race, rest = tokens[0], tokens[1:]
+        return [RACE_DE.get(race, race)] + [TYPELINE_DE.get(t, t) for t in rest]
+    words = (card["type"] or "").replace("Monster", "").split()
+    parts = [RACE_DE.get(card["race"], card["race"])] if card["race"] else []
+    parts += [TYPELINE_DE[w] for w in _TYPELINE_ORDER if w in words]
+    frame = card["frame_type"] or ""
+    if "Normal" in words or frame in ("normal", "normal_pendulum"):
+        parts.append("Normal")
+    elif "Effect" in words or frame in ("effect", "effect_pendulum"):
+        parts.append("Effekt")
+    return parts
+
+
+def typeline_text(card) -> str:
+    parts = typeline_parts(card)
+    return "[" + "/".join(parts) + "]" if parts else ""
+
+
+def level_text(card, short: bool = False) -> str:
+    """'★ Stufe 4', 'Rang 4' (Xyz) oder 'LINK-2'; short: '★4', 'R4', 'L2'."""
+    if card["frame_type"] == "link":
+        lv = card["link_value"]
+        return "" if lv is None else (f"L{lv}" if short else f"LINK-{lv}")
+    if card["level"] is None:
+        return ""
+    if (card["frame_type"] or "").startswith("xyz"):
+        return f"R{card['level']}" if short else f"Rang {card['level']}"
+    return f"★{card['level']}" if short else f"★ Stufe {card['level']}"
+
+
+def link_arrows_text(card) -> str:
+    """Link-Pfeile als Symbole im Uhrzeigersinn ('↑ → ↙'); leer ohne Daten."""
+    markers = set((_col(card, "link_markers") or "").split(","))
+    return " ".join(sym for key, sym in LINK_ARROWS.items() if key in markers)
+
+
+def card_kind_text(card) -> str:
+    """Kurzbeschreibung fuer Trefferlisten: 'FINSTERNIS · Synchro',
+    'Zauber · Schnell', 'Falle · Konter'."""
+    if is_monster(card):
+        attr = ATTR_DE.get(card["attribute"], card["attribute"] or "")
+        frame = (card["frame_type"] or "").replace("_pendulum", "")
+        kind = {"normal": "Normal", "effect": "Effekt", "ritual": "Ritual",
+                "fusion": "Fusion", "synchro": "Synchro", "xyz": "Xyz",
+                "link": "Link"}.get(frame, "")
+        if (card["frame_type"] or "").endswith("_pendulum"):
+            kind = f"{kind}-Pendel" if kind else "Pendel"
+        return " · ".join(p for p in (attr, kind) if p)
+    if card["type"] == "Spell Card":
+        return "Zauber · " + SPELL_KIND_DE.get(card["race"], card["race"] or "?")
+    if card["type"] == "Trap Card":
+        return "Falle · " + TRAP_KIND_DE.get(card["race"], card["race"] or "?")
+    return TYPE_DE.get(card["type"], card["type"] or "")

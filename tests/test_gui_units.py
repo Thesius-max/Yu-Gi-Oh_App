@@ -60,32 +60,107 @@ class RepositoryTests(QtTestCase):
         for text in ('"', 'a"b', "*", "NEAR(", "AND OR", "-x", "^", "(", "'"):
             self.assertIsInstance(self.repo.query(text=text), list, text)
 
-    def test_filters(self):
-        rows = self.repo.query(type="Spell Card", limit=50)
-        self.assertTrue(rows and all(r["type"] == "Spell Card" for r in rows))
-        rows = self.repo.query(attribute="LIGHT", level=4, atk_min=1000, atk_max=1800)
+    def test_kind_filter(self):
+        for kind, check in (("spell", lambda r: r["type"] == "Spell Card"),
+                            ("trap", lambda r: r["type"] == "Trap Card"),
+                            ("monster", lambda r: "Monster" in r["type"])):
+            rows = self.repo.query(kind=kind, limit=5000)
+            self.assertTrue(rows and all(check(r) for r in rows), kind)
+
+    def test_value_ranges(self):
+        rows = self.repo.query(kind="monster", attributes=["LIGHT"], level_min=4,
+                               level_max=4, atk_min=1000, atk_max=1800)
         self.assertTrue(rows)
         for r in rows:
             self.assertEqual((r["attribute"], r["level"]), ("LIGHT", 4))
             self.assertTrue(1000 <= r["atk"] <= 1800)
+            self.assertNotEqual(r["frame_type"], "link")
         arch = self.repo.distinct("archetype")[0]
         self.assertTrue(all(r["archetype"] == arch for r in self.repo.query(archetype=arch)))
-
-    def test_new_filters_race_trait_link_def(self):
-        self.assertIn("Dragon", self.repo.distinct("race"))
         rows = self.repo.query(race="Dragon", def_min=2000, def_max=2500, limit=100)
-        self.assertTrue(rows)
-        self.assertTrue(all(r["race"] == "Dragon" and 2000 <= r["def"] <= 2500
-                            for r in rows))
-        links = self.repo.query(link_value=2, limit=100)
-        self.assertTrue(links and all(r["link_value"] == 2 for r in links))
-        from yugioh_gui.repository import TRAITS
-        for key, _label, _sql in TRAITS:
-            rows = self.repo.query(trait=key, limit=50)
-            self.assertTrue(rows, key)
-        tuners = self.repo.query(trait="tuner", limit=5000)
+        self.assertTrue(rows and all(r["race"] == "Dragon" and 2000 <= r["def"] <= 2500
+                                     for r in rows))
+        links = self.repo.query(link_min=2, link_max=3, limit=1000)
+        self.assertTrue(links and all(r["link_value"] in (2, 3) for r in links))
+        scales = self.repo.query(scale_min=8, scale_max=13, limit=1000)
+        self.assertTrue(scales and all(r["scale"] >= 8 for r in scales))
+        # ATK 0 ist ein Wert, kein 'egal' (Ash Blossom hat ATK 0).
+        zero = {r["id"] for r in self.repo.query(atk_min=0, atk_max=0, limit=5000)}
+        self.assertIn(14558127, zero)
+        self.assertEqual(len(zero), self.scalar("SELECT COUNT(*) FROM cards WHERE atk = 0"))
+
+    def test_groups_or_inside_and_between(self):
+        rows = self.repo.query(frames=["synchro", "xyz"], attributes=["DARK", "LIGHT"],
+                               limit=5000)
+        frames = {r["frame_type"].replace("_pendulum", "") for r in rows}
+        self.assertEqual(frames, {"synchro", "xyz"})
+        self.assertEqual({r["attribute"] for r in rows}, {"DARK", "LIGHT"})
+        pend = self.repo.query(frames=["pendulum"], limit=5000)
+        self.assertTrue(pend and all(r["frame_type"].endswith("_pendulum") for r in pend))
+        # 'Effekt' ist der orange Rahmen -- keine Synchro-/Xyz-Monster mit Effekt.
+        effect = self.repo.query(frames=["effect"], limit=5000)
+        self.assertEqual({r["frame_type"] for r in effect}, {"effect", "effect_pendulum"})
+        quick = self.repo.query(kind="spell", st_kinds=["Quick-Play", "Field"], limit=5000)
+        self.assertEqual({r["race"] for r in quick}, {"Quick-Play", "Field"})
+        counter = self.repo.query(kind="trap", st_kinds=["Counter"], limit=5000)
+        self.assertTrue(counter and all(r["race"] == "Counter" for r in counter))
+
+    def test_traits(self):
+        from yugioh_gui.repository import TRAIT_SQL
+        for key in TRAIT_SQL:
+            self.assertTrue(self.repo.query(traits=[key], limit=5), key)
+        tuners = self.repo.query(traits=["tuner"], limit=5000)
         self.assertIn(14558127, {r["id"] for r in tuners})         # Ash Blossom
         self.assertTrue(all("Tuner" in r["type"] for r in tuners))
+
+    def test_passcode_and_set_code_search(self):
+        from yugioh_gui.repository import is_set_code
+        self.assertEqual(self.repo.query(text="14558127")[0]["id"], 14558127)
+        # Set-Nummer: englischer Code der Kartendaten, deutscher Druck und
+        # Kleinschreibung finden dieselbe Karte.
+        code = self.scalar("SELECT set_code FROM card_sets WHERE card_id = 14558127 "
+                           "AND set_code LIKE '%-EN%' LIMIT 1")
+        de = ydb.localize_set_code(code, "DE")
+        for text in (code, de, de.lower()):
+            self.assertIn(14558127, [r["id"] for r in self.repo.query(text=text)], text)
+        self.assertTrue(is_set_code("LOB-001") and is_set_code("RA01-DE008"))
+        self.assertFalse(is_set_code("Blue-Eyes") or is_set_code("Ash"))
+        # Eigener Druck mit freiem Code findet die Karte ebenfalls.
+        ydb.add_to_collection(self.db, 46986414, 1, set_code="XYZ9-DE999")
+        self.assertEqual([r["id"] for r in self.repo.query(text="xyz9-de999")], [46986414])
+
+    def test_order_in_sql(self):
+        top = self.repo.query(kind="monster", order=("atk", True), limit=5)
+        self.assertEqual(top[0]["atk"], self.scalar(
+            "SELECT MAX(atk) FROM cards WHERE type LIKE '%Monster%'"))
+        atks = [r["atk"] for r in top]
+        self.assertEqual(atks, sorted(atks, reverse=True))
+        # Link-Monster: Linkwert in der Stufen-Spalte; ohne DEF zaehlt -1.
+        links = self.repo.query(frames=["link"], order=("level", True), limit=3)
+        self.assertEqual(links[0]["link_value"], self.scalar(
+            "SELECT MAX(link_value) FROM cards WHERE frame_type = 'link'"))
+        self.assertEqual(self.repo.query(frames=["link"], order=("def", True), limit=1)[0]
+                         ["frame_type"], "link")
+        ydb.add_to_collection(self.db, 14558127, 50)
+        self.assertEqual(self.repo.query(order=("owned", True), limit=1)[0]["id"], 14558127)
+        # Unbekannter Schluessel = Standard-Reihenfolge (keine SQL-Injektion).
+        self.assertEqual(self.repo.query(order=("1; DROP TABLE cards", False), limit=5),
+                         self.repo.query(limit=5))
+        # Passcode-Suche mit Sortierung: Parameter bleiben stimmig.
+        self.assertEqual(self.repo.query(text="14558127", order=("atk", False))[0]["id"],
+                         14558127)
+
+    def test_owned_column_and_helpers(self):
+        ydb.add_to_collection(self.db, 14558127, 2, set_code="RA01-DE008")
+        owned = self.repo.owned_count(14558127)
+        row = self.repo.query(text="14558127")[0]
+        self.assertEqual(row["owned"], owned)
+        self.assertEqual(self.repo.set_count(14558127), self.scalar(
+            "SELECT COUNT(DISTINCT set_code) FROM card_sets WHERE card_id = 14558127"))
+        races = self.repo.monster_races()
+        self.assertIn("Dragon", races)
+        self.assertNotIn("Quick-Play", races)
+        self.assertNotIn("Counter", races)
 
     def test_wording_filter_needs_precomputed_flags(self):
         self.assertEqual(self.repo.query(wording="handtrap"), [])  # noch nicht berechnet
@@ -162,24 +237,79 @@ class FormatHelperTests(QtTestCase):
     def _card(self, where):
         return CardRepository(self.db).get_card(self.pick_ids(where)[0])
 
+    def _get(self, cid):
+        return CardRepository(self.db).get_card(cid)
+
     def test_stats_link_monster_without_def(self):
-        text = carddetail._format_card_stats(self._card("frame_type = 'link'"))
-        self.assertIn("Linkmonster", text)
-        self.assertRegex(text, r"ATK \d+(  •|$)")
+        self.set_real_link_markers()
+        cid = next(iter(self.REAL_LINK_MARKERS))           # S:P Little Knight
+        card = self._get(cid)
+        text = carddetail._format_card_stats(card, 3)
+        self.assertIn(f"ATK {card['atk']} / LINK-{card['link_value']}   → ←", text)  # im Uhrzeigersinn
+        self.assertEqual(text.count("LINK-"), 1)            # nicht auch oben
         self.assertNotIn("DEF", text)
         self.assertNotIn("None", text)
+        self.assertNotIn("★", text)
+        self.assertIn(f"Kartennummer {cid:08d}  ·  in 3 Sets", text)
 
-    def test_stats_regular_monster(self):
-        card = self._card("frame_type = 'effect' AND level = 4 AND def IS NOT NULL")
-        text = carddetail._format_card_stats(card)
-        self.assertIn("Stufe 4", text)
-        self.assertIn(f"ATK {card['atk']} / DEF {card['def']}", text)
-        self.assertIn(labels.ATTR_DE[card["attribute"]], text)
+    def test_stats_follow_the_card(self):
+        self.set_real_typelines()
+        self.assertEqual(carddetail._format_card_stats(self._get(14558127), 17).split("\n"), [
+            "FEUER  ·  ★ Stufe 3", "[Zombie/Empfänger/Effekt]", "ATK 0 / DEF 1800",
+            "Kartennummer 14558127  ·  in 17 Sets"])
+        utopia = carddetail._format_card_stats(self._get(84013237))
+        self.assertTrue(utopia.startswith("LICHT  ·  Rang 4\n[Krieger/Xyz/Effekt]\n"))
+        odd = carddetail._format_card_stats(self._get(16178681))
+        self.assertIn("[Drache/Pendel/Effekt]", odd)
+        self.assertIn("\nPendelskala 4\n", odd)
 
-    def test_stats_spell(self):
-        text = carddetail._format_card_stats(self._card("frame_type = 'spell'"))
-        self.assertTrue(text.startswith("Zauberkarte"))
+    def test_stats_spell_and_trap(self):
+        text = carddetail._format_card_stats(self._get(12580477))          # Raigeki
+        self.assertTrue(text.startswith("Zauberkarte · Normal\nKartennummer 12580477"))
         self.assertNotIn("ATK", text)
+        trap = carddetail._format_card_stats(self._get(44095762))          # Mirror Force
+        self.assertTrue(trap.startswith("Fallenkarte · Normal"))
+
+    def test_typeline_real_and_fallback(self):
+        # Ohne API-Typzeile (Dev-DB): aus 'type' hergeleitet, 'Effekt' nur
+        # wenn sicher -- Stardust (Synchro) bleibt ohne.
+        self.assertEqual(labels.typeline_parts(self._get(44508094)), ["Drache", "Synchro"])
+        self.assertEqual(labels.typeline_parts(self._get(14558127)),
+                         ["Zombie", "Empfänger", "Effekt"])
+        self.assertEqual(labels.typeline_parts(self._get(46986414)), ["Hexer", "Normal"])
+        self.assertEqual(labels.typeline_parts(self._get(64631466)),
+                         ["Hexer", "Ritual", "Effekt"])
+        self.assertEqual(labels.typeline_parts(self._get(12580477)), [])
+        self.set_real_typelines()
+        expected = {
+            14558127: "[Zombie/Empfänger/Effekt]", 46986414: "[Hexer/Normal]",
+            44508094: "[Drache/Synchro/Effekt]", 84013237: "[Krieger/Xyz/Effekt]",
+            16178681: "[Drache/Pendel/Effekt]", 64631466: "[Hexer/Ritual/Effekt]",
+            68934651: "[Cyberse/Link/Effekt]",
+        }
+        for cid, text in expected.items():
+            self.assertEqual(labels.typeline_text(self._get(cid)), text, cid)
+
+    def test_level_and_kind_texts(self):
+        cases = {
+            14558127: ("★3", "★ Stufe 3", "FEUER · Effekt"),
+            84013237: ("R4", "Rang 4", "LICHT · Xyz"),
+            68934651: ("L5", "LINK-5", "FINSTERNIS · Link"),
+            16178681: ("★7", "★ Stufe 7", "FINSTERNIS · Effekt-Pendel"),
+            12580477: ("", "", "Zauber · Normal"),
+            44095762: ("", "", "Falle · Normal"),
+        }
+        for cid, (short, full, kind) in cases.items():
+            card = self._get(cid)
+            self.assertEqual((labels.level_text(card, short=True), labels.level_text(card),
+                              labels.card_kind_text(card)), (short, full, kind), cid)
+
+    def test_symbol_tables_cover_real_data(self):
+        for ctype, table in (("Spell Card", labels.SPELL_KIND_DE),
+                             ("Trap Card", labels.TRAP_KIND_DE)):
+            values = {r[0] for r in self.query(
+                "SELECT DISTINCT race FROM cards WHERE type = ? AND race != ''", (ctype,))}
+            self.assertEqual(values, set(table), ctype)
 
     def test_corpus_diff_text(self):
         mine = self.own_deck()

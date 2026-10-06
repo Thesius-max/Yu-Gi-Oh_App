@@ -94,6 +94,31 @@ def write_real_link_markers(db: str) -> dict[int, str]:
     return dict(REAL_LINK_MARKERS)
 
 
+# Echte Typzeilen (YGOPRODeck 'typeline', geprueft 2026-10-06) -- die Dev-DB
+# ist aelter als die Spalte typeline und hat dort NULL.
+REAL_TYPELINES = {
+    14558127: "Zombie,Tuner,Effect",        # Ash Blossom & Joyous Spring
+    46986414: "Spellcaster,Normal",         # Dark Magician
+    44508094: "Dragon,Synchro,Effect",      # Stardust Dragon
+    84013237: "Warrior,Xyz,Effect",         # Number 39: Utopia
+    16178681: "Dragon,Pendulum,Effect",     # Odd-Eyes Pendulum Dragon
+    64631466: "Spellcaster,Ritual,Effect",  # Relinquished
+    68934651: "Cyberse,Link,Effect",        # Firewall Dragon Darkfluid
+}
+
+
+def write_real_typelines(db: str) -> dict[int, str]:
+    """Echte Typzeilen in eine (migrierte) Kopie schreiben."""
+    conn = ydb._connect(db)
+    try:
+        conn.executemany("UPDATE cards SET typeline = ? WHERE id = ?",
+                         [(t, cid) for cid, t in REAL_TYPELINES.items()])
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(REAL_TYPELINES)
+
+
 def remove_tree(folder: str) -> None:
     """Temp-Ordner loeschen und PRUEFEN, dass er weg ist. Unter Windows
     haelt eine offene SQLite-Verbindung die Datei fest -- rmtree mit
@@ -148,6 +173,7 @@ def api_payload_from_db(
             "linkval": r["link_value"], "card_sets": sets.get(r["id"], []),
             "linkmarkers": (r["link_markers"] or "").split(",")
                            if r["link_markers"] else None,
+            "typeline": r["typeline"].split(",") if r["typeline"] else None,
         })
         name_de, desc_de = r["name_de"], r["desc_de"]
         if de_override is not None:
@@ -218,6 +244,10 @@ class DevDbTestCase(unittest.TestCase):
         return [r[0] for r in rows]
 
     REAL_LINK_MARKERS = REAL_LINK_MARKERS
+    REAL_TYPELINES = REAL_TYPELINES
+
+    def set_real_typelines(self) -> dict[int, str]:
+        return write_real_typelines(self.db)
 
     def set_real_link_markers(self) -> dict[int, str]:
         """Traegt die echten Link-Pfeile in die Kopie ein (Rueckgabe wie
