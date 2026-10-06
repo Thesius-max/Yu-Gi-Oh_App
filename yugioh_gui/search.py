@@ -461,6 +461,26 @@ class SearchView(QSplitter):
     def _fill(self, cards, ranked: bool) -> None:
         current = self.current_card_id()
         table = self.table
+        # ResizeToContents misst bei sichtbarer Tabelle nach JEDEM setItem
+        # alle Zeilen neu (O(n²): 300 Treffer ~10 s Einfrieren beim
+        # Tabwechsel) -- waehrend des Fuellens aussetzen, am Ende einmal.
+        header = table.horizontalHeader()
+        auto_cols = [i for i in range(header.count())
+                     if header.sectionResizeMode(i)
+                     == QHeaderView.ResizeMode.ResizeToContents]
+        for i in auto_cols:
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        try:
+            self._fill_rows(cards, ranked)
+        finally:
+            for i in auto_cols:
+                header.setSectionResizeMode(
+                    i, QHeaderView.ResizeMode.ResizeToContents)
+        if current is not None:
+            self.select_card(current, show=False)
+
+    def _fill_rows(self, cards, ranked: bool) -> None:
+        table = self.table
         table.blockSignals(True)
         table.setSortingEnabled(False)
         # Alte Auswahl verwerfen -- sonst bliebe die Zeilennummer stehen und
@@ -495,8 +515,6 @@ class SearchView(QSplitter):
             self._set(row, COL_OWNED, str(owned) if owned else "", owned, right=True)
         table.setSortingEnabled(True)
         table.blockSignals(False)
-        if current is not None:
-            self.select_card(current, show=False)
 
     def _set(self, row: int, col: int, text: str, key, right: bool = False) -> None:
         item = _SortItem(text)

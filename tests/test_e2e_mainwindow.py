@@ -160,6 +160,26 @@ class StartupTests(E2ETestCase):
 
 
 class SearchCollectionFlowTests(E2ETestCase):
+    def test_tab_switch_back_to_search_does_not_freeze(self):
+        # Regression: ResizeToContents mass bei sichtbarer Tabelle nach jedem
+        # setItem alle Zeilen neu -- 300 Treffer froren ~10 s ein.
+        import time
+        from PySide6.QtWidgets import QApplication, QHeaderView
+        w = self.window()
+        sv = w.search_view
+        QApplication.processEvents()
+        w.tabs.setCurrentWidget(w.collection_view)
+        start = time.perf_counter()
+        w.tabs.setCurrentWidget(sv)
+        QApplication.processEvents()
+        self.assertLess(time.perf_counter() - start, 3.0)
+        self.assertEqual(sv.table.rowCount(), 300)
+        header = sv.table.horizontalHeader()
+        self.assertEqual(header.sectionResizeMode(search.COL_ATK),
+                         QHeaderView.ResizeMode.ResizeToContents)
+        self.assertEqual(header.sectionResizeMode(search.COL_NAME),
+                         QHeaderView.ResizeMode.Stretch)
+
     def test_search_add_to_collection_and_see_it_there(self):
         w = self.window()
         cid = self.pick_ids("name_de IS NOT NULL AND frame_type = 'effect' AND id NOT IN "
