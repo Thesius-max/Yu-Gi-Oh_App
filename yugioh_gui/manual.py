@@ -87,7 +87,12 @@ ersten Aufruf einmal lokal zwischengespeichert.
   die Karte bis zum nächsten Kartendaten-Update auf Englisch zurück. Deine
   Übersetzungen überleben Kartendaten-Updates.
 - **Sammlung → Hinzufügen** — legt die Karte in deinen Bestand (gleiche Drucke
-  werden zusammengeführt, nicht dupliziert).
+  werden zusammengeführt, nicht dupliziert). Davor wählst du optional das
+  **Set** (alle bekannten Drucke der Karte) und die **Sprache** (DE ist
+  vorbelegt): Die Kartendaten kennen nur englische Set-Codes — bei Deutsch
+  wird der Code passend umgeschrieben (`RA01-EN008` → `RA01-DE008`, alte
+  Codes `PSV-E088` → `PSV-G088`). Wie viele Kopien du schon hast, steht im
+  Titel der Box.
 - **Deck → + Deck / + Side** — fügt die Karte dem **aktiven Deck** in die
   passende Zone bzw. ins Side Deck hinzu.
 - **Kombo → + als Baustein zur aktiven Kombo** — übernimmt die Karte als
@@ -111,22 +116,36 @@ ersten Aufruf einmal lokal zwischengespeichert.
 # Sammlung
 
 Hier steht dein **physischer Kartenbestand** — was du tatsächlich besitzt.
+**Jede Karte steht genau einmal in der Liste**, mit ihrer Gesamtmenge. Hast
+du sie in mehreren Drucken (verschiedene Sets oder Sprachen), schlüsselt die
+Spalte **Drucke** die Menge auf, z. B. `2× RA01-DE008 (DE) · 1× MP22-EN257
+(EN)`.
 
 - **Filter:** nach Name (deutsch oder englisch), Kartenklasse, Attribut und
   Archetyp eingrenzen.
 - **Nur unübersetzte** — zeigt nur Karten ohne deutsche Übersetzung. Solche
   Karten sind in der Tabelle **orange** markiert; die Zusammenfassung zählt sie.
-- **Menge** ändern: Doppelklick auf die Mengen-Zelle.
+- **Menge** ändern: Doppelklick auf die Mengen-Zelle — direkt, solange die
+  Karte nur einen Druck hat; bei mehreren Drucken öffnet sich stattdessen
+  der Drucke-Dialog.
+- **Drucke** bearbeiten: Doppelklick auf die Spalte **Drucke** öffnet einen
+  Dialog mit allen Drucken der Karte. Dort änderst du je Druck **Set**
+  (Auswahl aus den bekannten Drucken, eigener Code geht auch), **Sprache**
+  (schreibt den Set-Code um) und **Menge**, fügst mit **+ Druck** weitere
+  hinzu oder entfernst einzelne. Wird ein Druck dadurch zu einem, den es
+  schon gibt, werden beide **zusammengeführt** (Mengen addiert, Notizen
+  verbunden).
 - **Kartenbild:** Maus über den Kartennamen zeigt eine Vorschau,
-  **Doppelklick** auf die Zeile öffnet die Kartendetails (inkl. ✎ DE).
+  **Doppelklick** auf den Namen öffnet die Kartendetails (inkl. ✎ DE).
 - **Exportieren…** — speichert die Sammlung als `.txt`, `.pdf`, Markdown
-  (`.md`) oder **CSV für Excel** (`.csv`, eine Zeile je Druck mit Menge,
-  Kartendaten, Set, Zustand, Sprache und Notizen). Die Sammlung wird
+  (`.md`) oder **CSV für Excel** (`.csv`) — wie die Liste **eine Zeile je
+  Karte** mit Gesamtmenge, Kartendaten, Drucken und Notizen. Die Sammlung wird
   **immer ohne Effekttexte** exportiert — die gibt es nur beim Deck-Export.
   Sind Filter aktiv, wird nur die gefilterte Ansicht exportiert, sonst die
   gesamte Sammlung.
 - **Aktualisieren** — Liste neu laden.
-- **Ausgewählten Eintrag entfernen** — nimmt den markierten Bestand heraus.
+- **Ausgewählte Karte entfernen** — nimmt die markierte Karte mit allen
+  Drucken aus dem Bestand (einzelne Drucke entfernst du im Drucke-Dialog).
 
 Identische Drucke einer Karte werden **zusammengeführt** statt mehrfach
 gelistet. Neue Karten kommen am einfachsten über den **Suche-Tab**
@@ -190,6 +209,15 @@ speisen nur die Vorschläge (siehe Kombo-Hilfe → Vorschläge). Tagge sie mit
 **Vergleich…** stellt das aktive Deck kopiengenau einer Korpus-/Referenz-
 Liste gegenüber (Main + Extra, Side außen vor): was die Referenz **mehr** hat
 und was **du mehr** hast, nach Differenz sortiert.
+
+## Einkaufsliste…
+
+**Einkaufsliste…** zeigt, welche Karten dir fehlen, um **alle eigenen Decks
+gleichzeitig** aus dem Bestand zu bauen (der Bedarf ist die Summe über alle
+Decks; Referenz-Decks zählen nicht) — je Karte Fehlmenge, Bedarf, Bestand und
+in welchen Decks sie steckt. Doppelklick öffnet die Kartendetails,
+**Exportieren…** speichert die Liste als `.txt`, `.pdf`, `.md` oder
+**CSV für Excel**.
 
 ## Kombo-Hilfe (rechte Box)
 
@@ -459,6 +487,9 @@ Englisch und allgemeine Rulings.
 - **Sprünge hierher:** Links in der **Wortlaut**-Lesehilfe und ein
   **Doppelklick auf eine Zeile im Spielfeld-Protokoll** (z. B. eine
   ⚠-Warnung) öffnen das passende Kapitel.
+- **Kartenlinks:** Beispielkarten im Text (Ash Blossom, Infinite
+  Impermanence …) sind anklickbar und öffnen die Kartendetails — mit
+  **Wortlaut ?** und **Rulings**.
 
 Stand ist die Master Rule (April 2020); bei Widersprüchen gilt das
 offizielle Regelheft.
