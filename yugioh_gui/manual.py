@@ -31,7 +31,7 @@ lokal gehalten — **danach arbeitet die App offline**.
 
 | Tab | Wofür |
 |---|---|
-| **Suche** | Karten finden, Details ansehen, in Sammlung/Deck/Kombo übernehmen |
+| **Suche** | Karten finden, Details ansehen, in die Sammlung übernehmen |
 | **Sammlung** | dein physischer Kartenbestand |
 | **Deck** | Decks bauen, prüfen, importieren/exportieren, Kombo-Hilfe |
 | **Spielfeld** | Decks testen — mit Regelwerk, Dummy-Gegner und Kombo-Recorder |
@@ -53,7 +53,7 @@ Danach füllen sich Such-Filter und Listen automatisch.
 # Suche
 
 Der Suche-Tab hat drei Spalten (frei per Trennbalken verschiebbar):
-**Filter** links, **Treffertabelle** in der Mitte, **Detailansicht** rechts.
+**Filter** links, **Trefferliste** in der Mitte, **Detailansicht** rechts.
 Die Filter folgen dem **Aufbau einer Karte** — du suchst nach dem, was auf
 der Karte steht.
 
@@ -108,19 +108,11 @@ ausgeblendeten Filter nicht — zurück bei *Monster* sind sie wieder da.
 
 Jede Änderung sucht sofort neu.
 
-## Treffertabelle
+## Trefferliste
 
-- Der **Farbstreifen** links zeigt die Rahmenfarbe der Karte (Pendel:
-  oben die Monsterart, unten grün).
-- Spalten: **Name**, **Eigenschaft / Art** (z. B. `FINSTERNIS · Synchro`
-  oder `Zauber · Schnell`), **★** (Stufe, `R4` = Rang, `L2` = Link), **ATK**,
-  **DEF** und **Bestand** (deine Kopien).
-- Klick auf einen Spaltenkopf **sortiert** (nochmal: umgekehrt) — und zwar
-  **alle** Treffer, nicht nur die angezeigten: „ATK absteigend“ zeigt die
-  stärksten Monster überhaupt. Bei einer Textsuche stehen die besten Treffer
-  zuerst; ein neuer Suchtext stellt diese Reihenfolge wieder her.
-- Die Spalte **Bestand** zählt sofort mit, wenn du rechts Karten zur
-  Sammlung hinzufügst.
+- Je Karte eine Zeile: der Name und bei Monstern `[ATK … / DEF …]`
+  (Link-Monster nur ATK). Ohne Suchtext nach Namen sortiert, bei einer
+  Textsuche stehen die besten Treffer zuerst.
 - Angezeigt werden höchstens 300 Treffer; gibt es mehr, steht unten
   „300+ Treffer – Suche eingrenzen“.
 - Maus über dem Namen zeigt den englischen Namen.
@@ -148,10 +140,6 @@ Aufruf einmal lokal zwischengespeichert.
   wird der Code passend umgeschrieben (`RA01-EN008` → `RA01-DE008`, alte
   Codes `PSV-E088` → `PSV-G088`). Wie viele Kopien du schon hast, steht im
   Titel der Box.
-- **Deck → + Deck / + Side** — fügt die Karte dem **aktiven Deck** in die
-  passende Zone bzw. ins Side Deck hinzu.
-- **Kombo → + als Baustein zur aktiven Kombo** — übernimmt die Karte als
-  Baustein der gerade im Kombos-Tab geöffneten Kombo.
 - **Wortlaut ?** — zerlegt den Kartentext nach dem genormten Wortlaut:
   Bedingung, Kosten, Ziel, Auflösung und Einschränkungen farbig markiert,
   dazu die Effektart (Zünd-, Auslöse-, Schnell-, Dauereffekt …), die Art des
@@ -219,8 +207,8 @@ Links die **Deckliste**, rechts der Deck-Inhalt mit den drei Zonen
 ## Decks verwalten
 
 - **Neues Deck / Deck löschen** — Decks anlegen und entfernen.
-- **Karten hinzufügen:** im Suche-Tab über **+ Deck / + Side**, oder per
-  **+ Karte hinzufügen** im Deck-Tab.
+- **Karten hinzufügen:** per **+ Karte hinzufügen** unter der jeweiligen
+  Zone (Suche nach Name oder Text).
 - **−1 / +1 / Entfernen** — Kopienzahl der markierten Karte ändern.
 - **→ Deck / → Side** — Karte zwischen Main/Extra und Side verschieben.
 - Maus über dem Kartennamen zeigt das **Kartenbild**, **Doppelklick** öffnet
@@ -289,7 +277,8 @@ Fünf Reiter:
   ihre **Interruption-Branches** (Varianten) — eine Linie ohne Branches steht
   bei gegnerischer Störung ohne Plan B da. Details im Tooltip.
 - **Vorschläge** — Kartenempfehlungen aus dem Synergie-Graphen samt
-  **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab. Oben
+  **Begründung** (Tooltip). Doppelklick zeigt die Karte im Suche-Tab,
+  **Ins Deck übernehmen** legt den gewählten Vorschlag ins Deck. Oben
   steht der **Engpass** — die Rolle mit den wenigsten Kopien in Main + Extra;
   passende Vorschläge stehen unter „Füllt die Lücke".
 - **Starthand** — interaktiver Simulator: Karten ankreuzen (Wahrscheinlichkeit
