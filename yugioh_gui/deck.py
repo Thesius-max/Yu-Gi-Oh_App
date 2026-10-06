@@ -275,6 +275,11 @@ class DeckView(QWidget):
         self.suggestion_list = QListWidget()
         self.suggestion_list.itemDoubleClicked.connect(self._open_suggestion)
         sv.addWidget(self.suggestion_list, stretch=1)
+        take_btn = QPushButton("Ins Deck übernehmen")
+        take_btn.setToolTip("Gewählten Vorschlag ins Deck legen "
+                            "(Extra-Deck-Monster landen im Extra Deck)")
+        take_btn.clicked.connect(self._take_suggestion)
+        sv.addWidget(take_btn)
         self.helper_tabs.addTab(sug_tab, "Vorschläge")
 
         sim_tab = QWidget()
@@ -843,6 +848,16 @@ class DeckView(QWidget):
             return
         self.open_card_callback(card_id)
 
+    def _take_suggestion(self) -> None:
+        """Gewaehlten Vorschlag ins aktive Deck (passende Zone)."""
+        item = self.suggestion_list.currentItem()
+        card_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if card_id is None:
+            return
+        _added, msg = self.add_card(card_id)
+        if msg:
+            QMessageBox.information(self, "Deck", msg)
+
     # -- Starthand-Simulator ------------------------------------------------
 
     def _checked_sim_copies(self) -> list[int]:
@@ -1094,7 +1109,7 @@ class DeckView(QWidget):
             QMessageBox.information(self, "Deck", msg)
         self.refresh()
 
-    # -- von aussen (Detailansicht der Suche) -------------------------------
+    # -- Karte per card_id ins aktive Deck ----------------------------------
 
     def add_card(self, card_id: int, to_side: bool = False):
         if self.deck_id is None:

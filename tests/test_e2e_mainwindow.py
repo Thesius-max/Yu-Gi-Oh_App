@@ -112,7 +112,7 @@ class StartupTests(E2ETestCase):
                          ["Suche", "Sammlung", "Deck", "Spielfeld", "Kombos", "Regelwerk",
                           "Handbuch"])
         sv = w.search_view
-        self.assertEqual(sv.table.rowCount(), 300)
+        self.assertEqual(sv.results.count(), 300)
         self.assertEqual(sv.count_label.text(), "300+ Treffer – Suche eingrenzen")
         self.assertEqual(sv.race_cb.count(), 1 + len(w.repo.monster_races()))
         self.assertEqual(sv.race_cb.itemText(sv.race_cb.findData("Spellcaster")), "Hexer")
@@ -125,7 +125,7 @@ class StartupTests(E2ETestCase):
         missing = os.path.join(self._dir, "gibt-es-nicht.sqlite3")
         w = self.window(missing)
         self.assertEqual(self.ui.titles(), ["Datenbank fehlt"])
-        self.assertEqual(w.search_view.table.rowCount(), 0)
+        self.assertEqual(w.search_view.results.count(), 0)
         self.assertEqual(w.collection_view.summary.text(), "Keine Datenbank vorhanden.")
         self.assertIn("Kein Deck ausgewählt", w.deck_view.status.text())
         for i in range(w.tabs.count()):                 # jeder Tab laesst sich oeffnen
@@ -137,7 +137,7 @@ class StartupTests(E2ETestCase):
             w = self.window()
         self.assertEqual(self.ui.titles("warning"), ["Sicherung fehlgeschlagen"])
         self.assertIn("Platte voll", self.ui.last_text())
-        self.assertEqual(w.search_view.table.rowCount(), 300)   # App laeuft trotzdem
+        self.assertEqual(w.search_view.results.count(), 300)   # App laeuft trotzdem
 
     def test_packaged_start_without_seed_warns(self):
         missing = os.path.join(self._dir, "fehlt.sqlite3")
@@ -151,9 +151,7 @@ class StartupTests(E2ETestCase):
         link = self.pick_ids("frame_type = 'link' AND atk IS NOT NULL")[0]
         self.search_and_select(w, link)
         sv = w.search_view
-        row = sv.table.currentRow()
-        self.assertEqual(sv.table.item(row, search.COL_DEF).text(), "–")
-        self.assertRegex(sv.table.item(row, search.COL_LEVEL).text(), r"^L\d$")
+        self.assertRegex(sv.results.currentItem().text(), r"  \[ATK \d+\]$")
         self.assertIn("LINK-", w.detail.stats.text())
         self.assertNotIn("DEF", w.detail.stats.text())
         self.assertNotIn("None", w.detail.stats.text())
@@ -161,10 +159,10 @@ class StartupTests(E2ETestCase):
 
 class SearchCollectionFlowTests(E2ETestCase):
     def test_tab_switch_back_to_search_does_not_freeze(self):
-        # Regression: ResizeToContents mass bei sichtbarer Tabelle nach jedem
-        # setItem alle Zeilen neu -- 300 Treffer froren ~10 s ein.
+        # Regression (Treffertabelle bis 2026-10-06): Tabwechsel zurueck in
+        # die Suche fror bei 300 Treffern ~10 s ein.
         import time
-        from PySide6.QtWidgets import QApplication, QHeaderView
+        from PySide6.QtWidgets import QApplication
         w = self.window()
         sv = w.search_view
         QApplication.processEvents()
@@ -173,12 +171,7 @@ class SearchCollectionFlowTests(E2ETestCase):
         w.tabs.setCurrentWidget(sv)
         QApplication.processEvents()
         self.assertLess(time.perf_counter() - start, 3.0)
-        self.assertEqual(sv.table.rowCount(), 300)
-        header = sv.table.horizontalHeader()
-        self.assertEqual(header.sectionResizeMode(search.COL_ATK),
-                         QHeaderView.ResizeMode.ResizeToContents)
-        self.assertEqual(header.sectionResizeMode(search.COL_NAME),
-                         QHeaderView.ResizeMode.Stretch)
+        self.assertEqual(sv.results.count(), 300)
 
     def test_search_add_to_collection_and_see_it_there(self):
         w = self.window()
@@ -194,8 +187,6 @@ class SearchCollectionFlowTests(E2ETestCase):
         self.click(w.detail, "Hinzufügen")
         self.click(w.detail, "Hinzufügen")               # gleicher Druck -> zusammengefuehrt
         self.assertEqual(w.detail.coll_box.title(), "Sammlung — im Bestand: 4")
-        sv = w.search_view                                 # Bestand-Spalte sofort
-        self.assertEqual(sv.table.item(sv.table.currentRow(), search.COL_OWNED).text(), "4")
         self.assertEqual(self.scalar("SELECT COUNT(*) FROM collection WHERE card_id = ?", (cid,)), 1)
 
         # 'Nur meine Sammlung' findet die Karte jetzt.
@@ -261,7 +252,7 @@ class SearchCollectionFlowTests(E2ETestCase):
         self.assertEqual(sv.kind(), "all")
         self.assertFalse(any(c.isChecked() for c in sv.frame_chips + sv.spell_chips))
         self.assertIsNone(sv.filters()["kind"])
-        self.assertEqual(sv.table.rowCount(), search.RESULT_LIMIT)
+        self.assertEqual(sv.results.count(), search.RESULT_LIMIT)
 
     def test_passcode_and_set_number_search(self):
         w = self.window()
@@ -270,42 +261,36 @@ class SearchCollectionFlowTests(E2ETestCase):
             sv.search_box.setText(text)
             QTest.keyClick(sv.search_box, Qt.Key.Key_Return)
             self.assertEqual(sv.result_ids()[:1], [14558127], text)
-        sv.table.selectRow(0)
+        sv.results.setCurrentRow(0)
         self.assertEqual(w.detail.current_id, 14558127)
         self.assertIn("Kartennummer 14558127", w.detail.stats.text())
 
-    def test_sorting_by_atk_and_stripe(self):
+    def test_result_list_and_selection(self):
         w = self.window()
         sv = w.search_view
+        self.chip(sv.frame_chips, "synchro").setChecked(True)   # unsichtbar: wirkt nicht
         sv.set_kind("monster")
-        sv.search()
-        sv.table.sortItems(search.COL_ATK, Qt.SortOrder.DescendingOrder)
-        atks = [sv.table.item(r, search.COL_ATK).data(search.SORT_ROLE)
-                for r in range(sv.table.rowCount())]
-        self.assertEqual(atks, sorted(atks, reverse=True))
-        # Sortiert wird in SQL ueber ALLE Monster, nicht nur ueber die ersten 300.
-        self.assertEqual(atks[0], self.scalar(
-            "SELECT MAX(atk) FROM cards WHERE type LIKE '%Monster%'"))
-        self.assertEqual(sv.table.rowCount(), search.RESULT_LIMIT)
-        # Neuer Suchtext: wieder Relevanz statt der Benutzer-Sortierung.
-        sv.search_box.setText("Ash Blossom")
-        self.assertIsNone(sv._order())
-        sv.search_box.clear()
-        sv.table.sortItems(search.COL_ATK, Qt.SortOrder.DescendingOrder)
-        frames = {sv.table.item(r, search.COL_STRIPE).data(search.FRAME_ROLE)
-                  for r in range(sv.table.rowCount())}
-        self.assertFalse(frames & {"spell", "trap"})
-        # Auswahl bleibt ueber das Sortieren erhalten (solange die Karte unter
-        # den Treffern ist -- hier eine Auswahl unter 300).
-        self.chip(sv.frame_chips, "synchro").setChecked(True)
         self.chip(sv.attr_chips, "DARK").setChecked(True)
         sv.search()
-        self.assertLess(sv.table.rowCount(), search.RESULT_LIMIT)
-        sv.table.selectRow(5)
-        chosen = sv.current_card_id()
-        sv.table.sortItems(search.COL_NAME, Qt.SortOrder.AscendingOrder)
-        self.assertEqual(sv.current_card_id(), chosen)
-        self.assertEqual(w.detail.current_id, chosen)
+        self.assertLess(sv.results.count(), search.RESULT_LIMIT)
+        # Liste wie frueher: Name + [ATK / DEF], nach Namen sortiert.
+        cid = sv.result_ids()[5]
+        card = w.repo.get_card(cid)
+        self.assertEqual(sv.results.item(5).text(), search.result_text(card))
+        self.assertIn(f"[ATK {card['atk']} / DEF {card['def']}]", sv.results.item(5).text())
+        self.assertEqual(sv.results.item(5).toolTip(), card["name"])
+        names = [w.repo.get_card(i)["name_de"] or w.repo.get_card(i)["name"]
+                 for i in sv.result_ids()]
+        self.assertEqual(names, sorted(names))
+        # Auswahl bleibt ueber eine neue Suche erhalten.
+        sv.results.setCurrentRow(5)
+        self.assertEqual(w.detail.current_id, cid)
+        sv.search()
+        self.assertEqual(sv.current_card_id(), cid)
+        # Die Detailansicht hat nur noch die Sammlung -- kein + Deck / + Kombo.
+        texts = {b.text() for b in w.detail.findChildren(QPushButton)}
+        self.assertIn("Hinzufügen", texts)
+        self.assertFalse(texts & {"+ Deck", "+ Side", "+ als Baustein zur aktiven Kombo"})
 
 
 class SearchDeckFlowTests(E2ETestCase):
@@ -319,15 +304,24 @@ class SearchDeckFlowTests(E2ETestCase):
 
         main, side = self.main_ids(2)
         extra = self.extra_ids(1)[0]
-        self.search_and_select(w, main)
+
+        def pick(card_id):
+            def handler(dlg):
+                dlg.search_box.setText(self.display_name(card_id))
+                self.select_data(dlg.list, card_id)
+                return QDialog.DialogCode.Accepted
+            return handler
+
+        dv = w.deck_view
         for _ in range(4):
-            self.click(w.detail, "+ Deck")
+            self.ui.dialogs["CardSearchDialog"] = pick(main)
+            dv.add_card_dialog("main")
         self.assertEqual(self.ui.messages[-1],
                          ("information", "Deck", "Maximal 3 Kopien je Karte erreicht."))
-        self.search_and_select(w, extra)
-        self.click(w.detail, "+ Deck")                     # landet automatisch im Extra
-        self.search_and_select(w, side)
-        self.click(w.detail, "+ Side")
+        self.ui.dialogs["CardSearchDialog"] = pick(extra)
+        dv.add_card_dialog("extra")
+        self.ui.dialogs["CardSearchDialog"] = pick(side)
+        dv.add_card_dialog("side")
         self.assertEqual(ydb.deck_counts(self.db, deck), {"main": 3, "extra": 1, "side": 1})
         # Detail zeigt jetzt die Bindung im Deck (ohne Bestand -> Warnung).
         self.search_and_select(w, main)
@@ -381,8 +375,11 @@ class SearchDeckFlowTests(E2ETestCase):
         dv._open_suggestion(item)                       # Doppelklick
         self.assertEqual(w.tabs.currentIndex(), 0)
         self.assertEqual(w.detail.current_id, cid)
-        self.click(w.detail, "+ Deck")
         w.tabs.setCurrentWidget(dv)
+        dv.suggestion_list.setCurrentItem(next(
+            dv.suggestion_list.item(i) for i in range(dv.suggestion_list.count())
+            if dv.suggestion_list.item(i).data(UR) == cid))
+        self.click(dv, "Ins Deck übernehmen")
         self.assertNotIn(cid, [dv.suggestion_list.item(i).data(UR)
                                for i in range(dv.suggestion_list.count())])
 
@@ -416,12 +413,18 @@ class ComboFlowTests(E2ETestCase):
             cv.role_cb.setCurrentIndex(cv.role_cb.findData(role))
         cv.steps_edit.setPlainText("NS A\nEff1 A -> Add B (Deck)")
 
-        # Ueber das DetailPanel einen weiteren Baustein zur aktiven Kombo.
+        # Weiterer Baustein ueber '+ Baustein…' im Kombo-Editor.
         extra_piece = self.unowned_ids(1)[0]
-        self.search_and_select(w, extra_piece)
-        self.click(w.detail, "+ als Baustein zur aktiven Kombo")
+
+        def pick_piece(dlg):
+            dlg.search_box.setText(self.display_name(extra_piece))
+            self.select_data(dlg.list, extra_piece)
+            return QDialog.DialogCode.Accepted
+        self.ui.dialogs["CardSearchDialog"] = pick_piece
+        self.click(cv, "+ Baustein…")
         self.assertEqual(len(ydb.combo_cards(self.db, combo)), 4)
 
+        w.tabs.setCurrentWidget(dv)
         w.tabs.setCurrentWidget(cv)                     # refresh sichert Schritte
         self.assertEqual([s["text"] for s in ydb.combo_steps(self.db, combo)],
                          ["NS A", "Eff1 A -> Add B (Deck)"])
@@ -594,7 +597,7 @@ class DataMenuFlowTests(E2ETestCase):
                           f"{n_cards} Karten aktualisiert (Datenbank-Version 999.1)."))
         self.assertEqual(self.user_data(), before)
         self.assertEqual(w.search_view.race_cb.count(), 1 + len(w.repo.monster_races()))
-        self.assertEqual(w.search_view.table.rowCount(), 300)
+        self.assertEqual(w.search_view.results.count(), 300)
 
     def test_broken_api_answer_changes_nothing(self):
         w = self.window()

@@ -839,7 +839,7 @@ class ComboView(QWidget):
         ydb.add_combo_card(self.repo.db_path, self.combo_id, card_id, 1)
         self._after_piece_change()
 
-    # -- von aussen (Detailansicht der Suche) -------------------------------
+    # -- Baustein per card_id (u. a. Tests) ---------------------------------
 
     def add_piece(self, card_id: int) -> None:
         if self.combo_id is None:

@@ -129,27 +129,6 @@ class RepositoryTests(QtTestCase):
         ydb.add_to_collection(self.db, 46986414, 1, set_code="XYZ9-DE999")
         self.assertEqual([r["id"] for r in self.repo.query(text="xyz9-de999")], [46986414])
 
-    def test_order_in_sql(self):
-        top = self.repo.query(kind="monster", order=("atk", True), limit=5)
-        self.assertEqual(top[0]["atk"], self.scalar(
-            "SELECT MAX(atk) FROM cards WHERE type LIKE '%Monster%'"))
-        atks = [r["atk"] for r in top]
-        self.assertEqual(atks, sorted(atks, reverse=True))
-        # Link-Monster: Linkwert in der Stufen-Spalte; ohne DEF zaehlt -1.
-        links = self.repo.query(frames=["link"], order=("level", True), limit=3)
-        self.assertEqual(links[0]["link_value"], self.scalar(
-            "SELECT MAX(link_value) FROM cards WHERE frame_type = 'link'"))
-        self.assertEqual(self.repo.query(frames=["link"], order=("def", True), limit=1)[0]
-                         ["frame_type"], "link")
-        ydb.add_to_collection(self.db, 14558127, 50)
-        self.assertEqual(self.repo.query(order=("owned", True), limit=1)[0]["id"], 14558127)
-        # Unbekannter Schluessel = Standard-Reihenfolge (keine SQL-Injektion).
-        self.assertEqual(self.repo.query(order=("1; DROP TABLE cards", False), limit=5),
-                         self.repo.query(limit=5))
-        # Passcode-Suche mit Sortierung: Parameter bleiben stimmig.
-        self.assertEqual(self.repo.query(text="14558127", order=("atk", False))[0]["id"],
-                         14558127)
-
     def test_owned_column_and_helpers(self):
         ydb.add_to_collection(self.db, 14558127, 2, set_code="RA01-DE008")
         owned = self.repo.owned_count(14558127)
@@ -565,20 +544,6 @@ class DetailPanelTests(QtTestCase):
         QTest.mouseClick(panel.add_btn, Qt.MouseButton.LeftButton)
         self.assertEqual(panel.coll_box.title(), "Sammlung — im Bestand: 3  ·  in Decks: 3")
         self.assertEqual(repo.owned_count(cid), 3)
-
-    def test_callbacks(self):
-        repo = CardRepository(self.db)
-        panel = self.track(carddetail.DetailPanel(repo))
-        cid = self.unowned_ids(1)[0]
-        panel.show_card(repo.get_card(cid))
-        panel._add_to_deck(False)                         # ohne Callback: nichts
-        calls = []
-        panel.add_to_deck_callback = lambda c, side: calls.append((c, side)) or (0, "voll")
-        panel.add_to_combo_callback = lambda c: calls.append(("combo", c))
-        QTest.mouseClick(panel.add_side_btn, Qt.MouseButton.LeftButton)
-        QTest.mouseClick(panel.add_combo_btn, Qt.MouseButton.LeftButton)
-        self.assertEqual(calls, [(cid, True), ("combo", cid)])
-        self.assertEqual(self.ui.messages, [("information", "Deck", "voll")])
 
     def test_offline_image_placeholder(self):
         repo = CardRepository(self.db)

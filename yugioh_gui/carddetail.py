@@ -1,6 +1,6 @@
 """Karten-Detailansichten und -Suche (von mehreren Tabs geteilt).
 
-DetailPanel (Suche-Tab, wirkt per Callbacks auf Deck/Kombo),
+DetailPanel (Suche-Tab: Karte wie gedruckt + in die Sammlung),
 CardDetailDialog (read-only Pop-up in Sammlung/Deck), CardSearchDialog
 (Karte nachschlagen, z.B. '+ Baustein' im Kombo-Editor), der
 gemeinsame Uebersetzungs-Editor edit_card_translation ('DE'-Knopf) sowie
@@ -473,7 +473,6 @@ class _CardHelpMixin:
 
 class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
     rulings_changed = Signal()
-    collection_changed = Signal(int)     # card_id nach '+ Sammlung'
 
     def __init__(self, repo: CardRepository):
         super().__init__()
@@ -519,28 +518,6 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
         coll_layout.addWidget(self.qty)
         coll_layout.addWidget(self.add_btn)
 
-        # Deck
-        deck_box = QGroupBox("Deck")
-        deck_layout = QHBoxLayout(deck_box)
-        self.add_deck_btn = QPushButton("+ Deck")
-        self.add_side_btn = QPushButton("+ Side")
-        self.add_deck_btn.clicked.connect(lambda: self._add_to_deck(False))
-        self.add_side_btn.clicked.connect(lambda: self._add_to_deck(True))
-        deck_layout.addWidget(self.add_deck_btn)
-        deck_layout.addWidget(self.add_side_btn)
-
-        # Wird von MainWindow gesetzt: callback(card_id, to_side) -> (added, msg)
-        self.add_to_deck_callback = None
-
-        # Kombo
-        combo_box = QGroupBox("Kombo")
-        combo_layout = QHBoxLayout(combo_box)
-        self.add_combo_btn = QPushButton("+ als Baustein zur aktiven Kombo")
-        self.add_combo_btn.clicked.connect(self._add_to_combo)
-        combo_layout.addWidget(self.add_combo_btn)
-        # Wird von MainWindow gesetzt: callback(card_id)
-        self.add_to_combo_callback = None
-
         layout.addWidget(self.image)
         name_row = QHBoxLayout()
         name_row.addWidget(self.name, stretch=1)
@@ -552,8 +529,6 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
         layout.addWidget(self.stats)
         layout.addWidget(self.text, stretch=1)
         layout.addWidget(coll_box)
-        layout.addWidget(deck_box)
-        layout.addWidget(combo_box)
         self._set_enabled(False)
 
     def _set_enabled(self, on: bool):
@@ -561,9 +536,6 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
         self.lang_cb.setEnabled(on)
         self.qty.setEnabled(on)
         self.add_btn.setEnabled(on)
-        self.add_deck_btn.setEnabled(on)
-        self.add_side_btn.setEnabled(on)
-        self.add_combo_btn.setEnabled(on)
         self.edit_trans_btn.setEnabled(on)
         self.wording_btn.setEnabled(on)
         self.rulings_btn.setEnabled(on)
@@ -575,20 +547,6 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
             updated = self.repo.get_card(self.current_id)
             if updated is not None:
                 self.show_card(updated)
-
-    def _add_to_combo(self) -> None:
-        if self.current_id is None or self.add_to_combo_callback is None:
-            return
-        self.add_to_combo_callback(self.current_id)
-
-    def _add_to_deck(self, to_side: bool) -> None:
-        if self.current_id is None or self.add_to_deck_callback is None:
-            return
-        result = self.add_to_deck_callback(self.current_id, to_side)
-        if result:
-            _added, msg = result
-            if msg:
-                QMessageBox.information(self, "Deck", msg)
 
     def show_card(self, card) -> None:
         self.current_id = card["id"]
@@ -622,7 +580,6 @@ class DetailPanel(_CardHelpMixin, CardImageView, QWidget):
             set_code=code, language=lang,
         )
         self._update_owned(self.current_id)
-        self.collection_changed.emit(self.current_id)
 
 
 class CardDetailDialog(_CardHelpMixin, CardImageView, QDialog):

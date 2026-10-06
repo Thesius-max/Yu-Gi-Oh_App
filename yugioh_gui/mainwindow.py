@@ -102,9 +102,6 @@ class MainWindow(QMainWindow):
         self.deck_view = DeckView(self.repo)
         self.combo_view = ComboView(self.repo)
         self.playtest_view = PlayTestView(self.repo)
-        # Detailansicht -> aktives Deck bzw. aktive Kombo
-        self.detail.add_to_deck_callback = self.deck_view.add_card
-        self.detail.add_to_combo_callback = self.combo_view.add_piece
         # Deck-Tab -> neue Kombo im Kombos-Tab oeffnen
         self.deck_view.open_combo_callback = self._open_combo
         self.playtest_view.open_combo_callback = self._open_combo
@@ -181,7 +178,7 @@ class MainWindow(QMainWindow):
 
     def _show_card(self, card_id: int) -> None:
         """Aus dem Deck-Tab: Karte im DetailPanel zeigen (lebt im Suche-Tab);
-        von dort fuegt '+ Deck' sie direkt dem aktiven Deck hinzu."""
+        ins Deck uebernimmt sie der Deck-Tab ('Ins Deck übernehmen')."""
         card = self.repo.get_card(card_id)
         if card is None:
             return

@@ -223,13 +223,3 @@ WORDING_COLORS = {
     "condition": _GOLD, "cost": "#7fd18b", "effect": "#8fc7ff",
     "limit": "#c79bff", "plain": _TEXT,
 }
-
-# Rahmenfarbe je Kartenart (Farbstreifen in der Trefferliste). Pendel:
-# oben die Farbe der Monsterart, unten Zauber-Gruen (wie auf der Karte).
-FRAME_COLORS = {
-    "normal": "#d9b15f", "effect": "#c8692f", "ritual": "#4f7fd0",
-    "fusion": "#9a5ab8", "synchro": "#e6e6e6", "xyz": "#0c0c0c",
-    "link": "#2c6bb3", "spell": "#1d9a87", "trap": "#b0407c",
-    "token": "#8c8c8c", "skill": "#3d6aa6",
-}
-PENDULUM_COLOR = FRAME_COLORS["spell"]

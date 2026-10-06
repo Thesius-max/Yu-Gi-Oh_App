@@ -1,35 +1,29 @@
-"""Suche-Tab: Filter nach dem Aufbau der Karte, Treffertabelle, Details.
+"""Suche-Tab: Filter nach dem Aufbau der Karte, Trefferliste, Details.
 
 Oben waehlt ein Umschalter die Kartenart (Alle/Monster/Zauber/Falle); es
 erscheinen nur die Filter, die fuer diese Art etwas bedeuten -- bei Monstern
 Monsterart, Eigenschaft, Typ, Merkmale und die Werte (Stufe/Rang, Link,
 Pendelskala, ATK/DEF), bei Zaubern/Fallen das Symbol. Innerhalb einer
 Chip-Gruppe gilt ODER, zwischen den Filtern UND; ausgeblendete Gruppen
-wirken nicht. Die Treffer stehen in einer sortierbaren Tabelle mit einem
-Farbstreifen in der Rahmenfarbe der Karte; die Auswahl zeigt die Karte im
-DetailPanel rechts (das auch '+ Deck'/'+ Kombo' traegt).
+wirken nicht. Die Treffer stehen als schlichte Liste (Name + ATK/DEF) in
+der Mitte; die Auswahl zeigt die Karte im DetailPanel rechts.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QLinearGradient
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
-    QCompleter, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QFormLayout,
+    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
+    QSplitter, QVBoxLayout, QWidget
 )
 
 import yugioh_db as ydb
 
 from .carddetail import DetailPanel
-from .labels import (
-    ATTR_DE, RACE_DE, SPELL_KIND_DE, TRAP_KIND_DE, card_kind_text, level_text
-)
+from .labels import ATTR_DE, RACE_DE, SPELL_KIND_DE, TRAP_KIND_DE
 from .repository import CardRepository
-from .theme import FRAME_COLORS, PENDULUM_COLOR
 
 
 KINDS = (("all", "Alle"), ("monster", "Monster"), ("spell", "Zauber"),
@@ -41,60 +35,18 @@ ATTRIBUTES = ("LIGHT", "DARK", "EARTH", "WATER", "FIRE", "WIND", "DIVINE")
 TRAITS = (("tuner", "Empfänger"), ("flip", "Flipp"), ("gemini", "Zwilling"),
           ("spirit", "Spirit"), ("union", "Union"), ("toon", "Toon"))
 
-# Spalten der Treffertabelle
-COL_STRIPE, COL_NAME, COL_KIND, COL_LEVEL, COL_ATK, COL_DEF, COL_OWNED = range(7)
-HEADERS = ("", "Name", "Eigenschaft / Art", "★", "ATK", "DEF", "Bestand")
-# Datenslots: UserRole = card_id (Namenszelle), SORT_ROLE = Sortierschluessel,
-# FRAME_ROLE = frame_type (Streifen).
-SORT_ROLE = Qt.ItemDataRole.UserRole + 1
-FRAME_ROLE = Qt.ItemDataRole.UserRole + 2
-
 RESULT_LIMIT = 300
-# Spalten, die in SQL sortiert werden (repository.ORDER_SQL) -- so zeigt
-# "ATK absteigend" die staerksten Treffer insgesamt, nicht nur unter den
-# ersten 300. Eigenschaft/Art sortiert nur die angezeigten Zeilen.
-ORDER_KEYS = {COL_NAME: "name", COL_LEVEL: "level", COL_ATK: "atk",
-              COL_DEF: "def", COL_OWNED: "owned"}
 
 
-def frame_brush(frame_type: str | None) -> QBrush:
-    """Pinsel in der Rahmenfarbe; Pendel oben Monsterart, unten Gruen."""
-    frame = frame_type or ""
-    base = frame.replace("_pendulum", "")
-    color = QColor(FRAME_COLORS.get(base, FRAME_COLORS["token"]))
-    if not frame.endswith("_pendulum"):
-        return QBrush(color)
-    grad = QLinearGradient(0, 0, 0, 1)
-    grad.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
-    grad.setColorAt(0.0, color)
-    grad.setColorAt(0.49, color)
-    grad.setColorAt(0.51, QColor(PENDULUM_COLOR))
-    grad.setColorAt(1.0, QColor(PENDULUM_COLOR))
-    return QBrush(grad)
-
-
-class _StripeDelegate(QStyledItemDelegate):
-    """Farbstreifen unabhaengig von Auswahl/Hover (das Theme faerbte die
-    Zelle sonst gold ein)."""
-
-    def paint(self, painter, option, index) -> None:
-        rect = option.rect.adjusted(2, 2, -2, -2)
-        painter.save()
-        painter.setPen(QColor("#3a2f4d"))
-        painter.setBrush(frame_brush(index.data(FRAME_ROLE)))
-        painter.drawRect(rect)
-        painter.restore()
-
-
-class _SortItem(QTableWidgetItem):
-    """Sortiert nach SORT_ROLE (Zahlen numerisch, fehlende Werte zuletzt
-    beim Aufsteigen) statt nach dem angezeigten Text."""
-
-    def __lt__(self, other) -> bool:
-        a, b = self.data(SORT_ROLE), other.data(SORT_ROLE)
-        if a is None or b is None:
-            return super().__lt__(other)
-        return a < b
+def result_text(card) -> str:
+    """Zeile der Trefferliste: Name, bei Monstern [ATK / DEF] -- Link-Monster
+    ohne DEF (die ist NULL; nie "None" anzeigen)."""
+    name = card["name_de"] or card["name"]
+    if card["atk"] is None:
+        return name
+    if card["def"] is None:
+        return f"{name}  [ATK {card['atk']}]"
+    return f"{name}  [ATK {card['atk']} / DEF {card['def']}]"
 
 
 def _range_spin(maximum: int, step: int = 1, egal: int = -1) -> QSpinBox:
@@ -130,9 +82,8 @@ class SearchView(QSplitter):
         self.addWidget(self._build_filter_panel())
         self.addWidget(self._build_results())
         self.detail = DetailPanel(repo)
-        self.detail.collection_changed.connect(self._update_owned)
         self.addWidget(self.detail)
-        self.setSizes([290, 430, 400])
+        self.setSizes([290, 380, 440])
         self.setStretchFactor(1, 1)
         self._update_visibility()
         if repo.exists():
@@ -188,7 +139,7 @@ class SearchView(QSplitter):
         self.search_box.setToolTip(
             "Name oder Kartentext (Wortanfang genügt), die Kartennummer "
             "(Passcode, z. B. 14558127) oder eine Set-Nummer (z. B. RA01-DE008)")
-        self.search_box.textChanged.connect(self._on_text_changed)
+        self.search_box.textChanged.connect(self._changed)
         self.search_box.returnPressed.connect(self.search)
         v.addWidget(self.search_box)
 
@@ -298,28 +249,9 @@ class SearchView(QSplitter):
         host = QWidget()
         v = QVBoxLayout(host)
         v.setContentsMargins(0, 0, 0, 0)
-        self.table = QTableWidget(0, len(HEADERS))
-        self.table.setHorizontalHeaderLabels(HEADERS)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(24)
-        self.table.setItemDelegateForColumn(COL_STRIPE, _StripeDelegate(self.table))
-        self.table.setWordWrap(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(COL_STRIPE, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(COL_STRIPE, 12)
-        header.setMinimumSectionSize(12)
-        header.setSortIndicatorShown(True)
-        self.table.setSortingEnabled(True)
-        self.table.sortByColumn(COL_NAME, Qt.SortOrder.AscendingOrder)
-        self._sorted_by_user = False
-        header.sortIndicatorChanged.connect(self._on_sort_changed)
-        self.table.itemSelectionChanged.connect(self._on_select)
-        v.addWidget(self.table, stretch=1)
+        self.results = QListWidget()
+        self.results.currentItemChanged.connect(self._on_select)
+        v.addWidget(self.results, stretch=1)
         self.count_label = QLabel("")
         self.count_label.setObjectName("HintLabel")
         v.addWidget(self.count_label)
@@ -450,147 +382,52 @@ class SearchView(QSplitter):
                 ydb.ensure_wording_flags(self.repo.db_path)
             finally:
                 QApplication.restoreOverrideCursor()
-        cards = self.repo.query(**f, order=self._order(), limit=RESULT_LIMIT + 1)
+        cards = self.repo.query(**f, limit=RESULT_LIMIT + 1)
         more = len(cards) > RESULT_LIMIT
-        self._fill(cards[:RESULT_LIMIT], ranked=bool(f["text"].strip()))
-        n = len(cards[:RESULT_LIMIT])
-        self.count_label.setText(
-            f"{RESULT_LIMIT}+ Treffer – Suche eingrenzen" if more
-            else f"{n} Treffer")
-
-    def _fill(self, cards, ranked: bool) -> None:
+        cards = cards[:RESULT_LIMIT]
         current = self.current_card_id()
-        table = self.table
-        # ResizeToContents misst bei sichtbarer Tabelle nach JEDEM setItem
-        # alle Zeilen neu (O(n²): 300 Treffer ~10 s Einfrieren beim
-        # Tabwechsel) -- waehrend des Fuellens aussetzen, am Ende einmal.
-        header = table.horizontalHeader()
-        auto_cols = [i for i in range(header.count())
-                     if header.sectionResizeMode(i)
-                     == QHeaderView.ResizeMode.ResizeToContents]
-        for i in auto_cols:
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
-        try:
-            self._fill_rows(cards, ranked)
-        finally:
-            for i in auto_cols:
-                header.setSectionResizeMode(
-                    i, QHeaderView.ResizeMode.ResizeToContents)
+        self.results.blockSignals(True)
+        self.results.clear()
+        for c in cards:
+            item = QListWidgetItem(result_text(c))
+            item.setData(Qt.ItemDataRole.UserRole, c["id"])
+            item.setToolTip(c["name"])                  # englischer Name
+            self.results.addItem(item)
+        self.results.blockSignals(False)
         if current is not None:
             self.select_card(current, show=False)
-
-    def _fill_rows(self, cards, ranked: bool) -> None:
-        table = self.table
-        table.blockSignals(True)
-        table.setSortingEnabled(False)
-        # Alte Auswahl verwerfen -- sonst bliebe die Zeilennummer stehen und
-        # zeigte nach dem Neuaufbau auf eine andere Karte.
-        table.setCurrentCell(-1, -1)
-        table.clearSelection()
-        table.setRowCount(len(cards))
-        for row, c in enumerate(cards):
-            stripe = QTableWidgetItem()
-            stripe.setData(FRAME_ROLE, c["frame_type"])
-            stripe.setToolTip(card_kind_text(c))
-            table.setItem(row, COL_STRIPE, stripe)
-            name = c["name_de"] or c["name"]
-            # Textsuche: die Relevanz-Reihenfolge der Datenbank bleibt der
-            # Schluessel der Namensspalte, bis der Benutzer selbst sortiert.
-            self._set(row, COL_NAME, name,
-                      (row if ranked and not self._sorted_by_user
-                       else name.casefold()))
-            table.item(row, COL_NAME).setData(Qt.ItemDataRole.UserRole, c["id"])
-            table.item(row, COL_NAME).setToolTip(c["name"])   # englischer Name
-            self._set(row, COL_KIND, card_kind_text(c), card_kind_text(c).casefold())
-            lvl = c["link_value"] if c["frame_type"] == "link" else c["level"]
-            self._set(row, COL_LEVEL, level_text(c, short=True),
-                      -1 if lvl is None else lvl)
-            for col, key in ((COL_ATK, "atk"), (COL_DEF, "def")):
-                val = c[key]
-                text = "" if val is None else str(val)
-                if c["frame_type"] == "link" and key == "def":
-                    text = "–"
-                self._set(row, col, text, -1 if val is None else val, right=True)
-            owned = c["owned"] or 0
-            self._set(row, COL_OWNED, str(owned) if owned else "", owned, right=True)
-        table.setSortingEnabled(True)
-        table.blockSignals(False)
-
-    def _set(self, row: int, col: int, text: str, key, right: bool = False) -> None:
-        item = _SortItem(text)
-        item.setData(SORT_ROLE, key)
-        if right:
-            item.setTextAlignment(Qt.AlignmentFlag.AlignRight
-                                  | Qt.AlignmentFlag.AlignVCenter)
-        self.table.setItem(row, col, item)
-
-    def _on_sort_changed(self, *_):
-        """Klick auf einen Spaltenkopf: ab jetzt gilt die Sortierung des
-        Benutzers -- neu abfragen, damit sie ueber ALLE Treffer gilt."""
-        if self._loading or self.table.signalsBlocked():
-            return
-        self._sorted_by_user = True
-        self.search()
-
-    def _order(self):
-        """(Schluessel, absteigend?) fuer die Abfrage oder None (Standard:
-        Name bzw. Relevanz der Textsuche)."""
-        if not self._sorted_by_user:
-            return None
-        header = self.table.horizontalHeader()
-        key = ORDER_KEYS.get(header.sortIndicatorSection())
-        if key is None:
-            return None
-        return key, header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
-
-    def _on_text_changed(self, *_):
-        # Neuer Suchtext: wieder nach Relevanz (Namensspalte, aufsteigend).
-        if self._sorted_by_user:
-            self._sorted_by_user = False
-            header = self.table.horizontalHeader()
-            header.blockSignals(True)
-            header.setSortIndicator(COL_NAME, Qt.SortOrder.AscendingOrder)
-            header.blockSignals(False)
-        self._changed()
+        self.count_label.setText(
+            f"{RESULT_LIMIT}+ Treffer – Suche eingrenzen" if more
+            else f"{len(cards)} Treffer")
 
     def refresh(self) -> None:
-        """Treffer neu laden (Bestand kann sich in anderen Tabs geaendert
-        haben); Auswahl und Sortierung bleiben."""
+        """Treffer neu laden ('Nur meine Sammlung' kann sich in anderen Tabs
+        geaendert haben); die Auswahl bleibt."""
         if self.repo.exists():
             self.search()
 
-    def _update_owned(self, card_id: int) -> None:
-        """Bestandsspalte einer Zeile nach '+ Sammlung' im DetailPanel."""
-        owned = self.repo.owned_count(card_id)
-        for row in range(self.table.rowCount()):
-            if self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) == card_id:
-                item = self.table.item(row, COL_OWNED)
-                item.setText(str(owned) if owned else "")
-                item.setData(SORT_ROLE, owned)
-
     def result_ids(self) -> list[int]:
         """card_ids der Treffer in Anzeigereihenfolge."""
-        return [self.table.item(r, COL_NAME).data(Qt.ItemDataRole.UserRole)
-                for r in range(self.table.rowCount())]
+        return [self.results.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.results.count())]
 
     def current_card_id(self) -> int | None:
-        row = self.table.currentRow()
-        item = self.table.item(row, COL_NAME) if row >= 0 else None
+        item = self.results.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
     def select_card(self, card_id: int, show: bool = True) -> bool:
-        """Zeile der Karte waehlen (falls in den Treffern)."""
-        for row in range(self.table.rowCount()):
-            if self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) == card_id:
-                self.table.blockSignals(True)
-                self.table.setCurrentCell(row, COL_NAME)
-                self.table.blockSignals(False)
+        """Eintrag der Karte waehlen (falls unter den Treffern)."""
+        for i in range(self.results.count()):
+            if self.results.item(i).data(Qt.ItemDataRole.UserRole) == card_id:
+                self.results.blockSignals(True)
+                self.results.setCurrentRow(i)
+                self.results.blockSignals(False)
                 if show:
                     self._on_select()
                 return True
         return False
 
-    def _on_select(self) -> None:
+    def _on_select(self, *_) -> None:
         card_id = self.current_card_id()
         if card_id is None:
             return

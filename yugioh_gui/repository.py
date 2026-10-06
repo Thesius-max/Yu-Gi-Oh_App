@@ -44,17 +44,6 @@ TRAIT_SQL = {
     "union": "c.type LIKE '%Union%'",
     "toon": "c.type LIKE '%Toon%'",
 }
-# Sortierung der Treffertabelle in SQL (sonst saehe man bei 300+ Treffern
-# nur die Reihenfolge der ersten 300 nach Name). Fehlende Werte zaehlen wie
-# in der Tabelle als -1, Namen casefold -- gleiche Schluessel wie dort.
-ORDER_SQL = {
-    "name": "casefold(COALESCE(c.name_de, c.name))",
-    "level": "COALESCE(CASE WHEN c.frame_type = 'link' THEN c.link_value "
-             "ELSE c.level END, -1)",
-    "atk": "COALESCE(c.atk, -1)",
-    "def": "COALESCE(c.def, -1)",
-    "owned": "owned",
-}
 # Set-Nummer wie auf der Karte (RA01-DE008, LOB-001, L5DD-ENC09).
 _SET_CODE_RE = re.compile(r"^[A-Za-z0-9]{2,5}-(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{3,6}$")
 _OWNED_SQL = ("(SELECT COALESCE(SUM(col.quantity), 0) FROM collection col "
@@ -118,7 +107,6 @@ class CardRepository:
         archetype: str | None = None,
         wording: str | None = None,
         only_collection: bool = False,
-        order: tuple[str, bool] | None = None,
         limit: int = 300,
     ) -> list:
         """Kartensuche nach dem Aufbau der Karte. Text: Name/Kartentext
@@ -127,13 +115,11 @@ class CardRepository:
         englischen der Kartendaten abgebildet, eigene Drucke zaehlen mit).
         Gruppen (frames, attributes, traits, st_kinds) verknuepfen ODER,
         alle Filter untereinander UND; None/leer = egal. 'wording' setzt
-        ensure_wording_flags voraus. Jede Zeile traegt 'owned' (Bestand).
-        order = (Schluessel aus ORDER_SQL, absteigend?) ersetzt die
-        Standard-Reihenfolge (Name bzw. Relevanz der Textsuche)."""
+        ensure_wording_flags voraus. Jede Zeile traegt 'owned' (Bestand)."""
         clauses: list[str] = []
         params: list = []
         text = (text or "").strip()
-        order_default = " ORDER BY COALESCE(c.name_de, c.name) LIMIT ?"
+        order = " ORDER BY COALESCE(c.name_de, c.name) LIMIT ?"
         base_select = f"SELECT c.*, {_OWNED_SQL} FROM cards c"
         if text and is_set_code(text):
             # Set-Nummer: kein Volltext (der zerlegte die Nummer in Woerter).
@@ -150,14 +136,14 @@ class CardRepository:
                 base = (base_select + " WHERE (c.id IN (SELECT rowid FROM cards_fts "
                         "WHERE cards_fts MATCH ?) OR c.id = ?)")
                 params += [f'"{safe}"*', int(text)]
-                order_default = (" ORDER BY (c.id = ?) DESC, "
+                order = (" ORDER BY (c.id = ?) DESC, "
                                  "COALESCE(c.name_de, c.name) LIMIT ?")
             else:
                 base = (f"SELECT c.*, {_OWNED_SQL} FROM cards_fts "
                         "JOIN cards c ON c.id = cards_fts.rowid "
                         "WHERE cards_fts MATCH ?")
                 params.append(f'"{safe}"*')
-                order_default = " ORDER BY cards_fts.rank LIMIT ?"
+                order = " ORDER BY cards_fts.rank LIMIT ?"
         else:
             base = base_select + " WHERE 1=1"
 
@@ -194,15 +180,8 @@ class CardRepository:
                 "EXISTS (SELECT 1 FROM collection col WHERE col.card_id = c.id)"
             )
 
-        if order and order[0] in ORDER_SQL:
-            direction = "DESC" if order[1] else "ASC"
-            order = (f" ORDER BY {ORDER_SQL[order[0]]} {direction}, "
-                     f"{ORDER_SQL['name']} LIMIT ?")
-        elif text.isdigit() and not is_set_code(text):
+        if text.isdigit() and not is_set_code(text):
             params.append(int(text))            # (c.id = ?) DESC: Passcode zuerst
-            order = order_default
-        else:
-            order = order_default
         sql = base + "".join(" AND " + c for c in clauses) + order
         params.append(limit)
 
