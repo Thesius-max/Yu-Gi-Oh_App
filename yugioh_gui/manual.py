@@ -27,7 +27,7 @@ und pflegt eine eigene **Kombo-Bibliothek**. Sie läuft eigenständig auf deinem
 Rechner; die Kartendaten werden einmalig aus dem Internet geladen und danach
 lokal gehalten — **danach arbeitet die App offline**.
 
-## Die sechs Tabs
+## Die sieben Tabs
 
 | Tab | Wofür |
 |---|---|
@@ -111,8 +111,10 @@ Jede Änderung sucht sofort neu.
 ## Trefferliste
 
 - Je Karte eine Zeile: der Name und bei Monstern `[ATK … / DEF …]`
-  (Link-Monster nur ATK). Ohne Suchtext nach Namen sortiert, bei einer
-  Textsuche stehen die besten Treffer zuerst.
+  (Link-Monster nur ATK). Ohne Suchtext nach Namen sortiert. Bei einer
+  Textsuche kommen zuerst Karten, deren **Name** passt (exakt, beginnt mit
+  dem Wort, enthält es), danach Treffer im Kartentext — „Ash“ findet so
+  Aschenblüte vor „Priestess of the Ashened City“.
 - Angezeigt werden höchstens 300 Treffer; gibt es mehr, steht unten
   „300+ Treffer – Suche eingrenzen“.
 - Maus über dem Namen zeigt den englischen Namen.
@@ -303,6 +305,11 @@ Sandkasten oder mit **Regelwerk** und einem **Dummy-Gegner**. Der
 Spielzustand selbst wird nicht gespeichert; **Neue Starthand** beginnt von
 vorn. Dauerhaft bleibt nur, was du mit dem **Kombo-Recorder** (siehe unten)
 ausdrücklich als Kombo speicherst.
+
+Das Brett **passt sich der Fenstergröße an**: Karten und Zonen werden so
+groß, dass Brett und Hand ohne Scrollen sichtbar sind; die Reihen des
+Gegners sind etwas kleiner. Blendest du die Gegnerseite aus, werden deine
+Karten größer. Erst bei sehr kleinem Fenster wird gescrollt.
 
 ## Zug, Phasen und Lebenspunkte
 
