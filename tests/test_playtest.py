@@ -209,6 +209,39 @@ class PlayTestViewTests(_PlayTestBase):
 
     # -- Tests --------------------------------------------------------------
 
+    def test_board_and_hand_fit_without_scrolling(self):
+        from PySide6.QtWidgets import QApplication
+        v = self.v
+
+        def settle():                   # Groessen-Timer + Layout-Durchlaeufe
+            for _ in range(6):
+                QApplication.processEvents()
+
+        v.show()
+        sizes = {}
+        for w, h in ((1000, 640), (800, 520), (1600, 900)):
+            v.resize(w, h)
+            settle()
+            sizes[(w, h)] = v._zone_px
+            if v._zone_px > self.pt._ZONE_MIN:
+                self.assertEqual(v._board_scroll.verticalScrollBar().maximum(), 0,
+                                 (w, h, v._zone_px))
+            self.assertGreater(v._hand_row.count(), 0)
+            card = v._hand_row.itemAt(0).widget()
+            self.assertEqual(card.height(), v._card_size()[1])
+            # Gegnerreihen kompakter als die eigenen.
+            self.assertLess(v._zones["om0"].width(), v._zones["m0"].width())
+        self.assertLess(sizes[(800, 520)], sizes[(1000, 640)])
+        self.assertLess(sizes[(1000, 640)], sizes[(1600, 900)])
+        # Ohne Gegnerseite: mehr Platz, groessere Zellen.
+        v.resize(1000, 640)
+        settle()
+        with_opp = v._zone_px
+        v.opp_check.setChecked(False)
+        settle()
+        self.assertGreater(v._zone_px, with_opp)
+        v.opp_check.setChecked(True)
+
     def test_held_card_sent_away_cannot_be_placed_again(self):
         v = self.v
         base = self._counts()

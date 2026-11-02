@@ -60,6 +60,34 @@ def is_set_code(text: str) -> bool:
     return bool(_SET_CODE_RE.match(text.strip()))
 
 
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _name_rank_order(text: str) -> tuple[str, list]:
+    """ORDER BY fuer die Textsuche: Treffer im Kartennamen (de oder en) vor
+    Treffern nur im Kartentext -- gestuft nach exakt, Name beginnt mit dem
+    Wort, Wort irgendwo im Namen, Name beginnt mit dem Text, Name enthaelt
+    ihn; innerhalb einer Stufe die Volltext-Relevanz. ("Ash" findet so
+    "Ash Blossom & Joyous Spring" vor "Priestess of the Ashened City".)"""
+    folded = text.casefold()
+    t = _escape_like(folded)
+    tiers = (("=", folded, False), ("LIKE", t + " %", False),
+             ("LIKE", "% " + t + " %", True), ("LIKE", t + "%", False),
+             ("LIKE", "%" + t + "%", False))
+    parts, params = [], []
+    for rank, (op, pattern, padded) in enumerate(tiers):
+        esc = " ESCAPE '\\'" if op == "LIKE" else ""
+        cols = [f"' ' || casefold({col}) || ' '" if padded else f"casefold({col})"
+                for col in ("c.name", "c.name_de")]
+        parts.append(f"WHEN {cols[0]} {op} ?{esc} OR {cols[1]} {op} ?{esc} "
+                     f"THEN {rank}")
+        params += [pattern, pattern]
+    sql = (" ORDER BY CASE " + " ".join(parts) + f" ELSE {len(tiers)} END, "
+           "cards_fts.rank LIMIT ?")
+    return sql, params
+
+
 class CardRepository:
     # Whitelist, damit Spaltennamen nie aus Benutzereingaben kommen.
     _FILTER_COLUMNS = ("type", "attribute", "archetype", "race")
@@ -118,6 +146,7 @@ class CardRepository:
         ensure_wording_flags voraus. Jede Zeile traegt 'owned' (Bestand)."""
         clauses: list[str] = []
         params: list = []
+        order_params: list = []       # Parameter im ORDER BY (nach den Filtern)
         text = (text or "").strip()
         order = " ORDER BY COALESCE(c.name_de, c.name) LIMIT ?"
         base_select = f"SELECT c.*, {_OWNED_SQL} FROM cards c"
@@ -137,13 +166,14 @@ class CardRepository:
                         "WHERE cards_fts MATCH ?) OR c.id = ?)")
                 params += [f'"{safe}"*', int(text)]
                 order = (" ORDER BY (c.id = ?) DESC, "
-                                 "COALESCE(c.name_de, c.name) LIMIT ?")
+                         "COALESCE(c.name_de, c.name) LIMIT ?")
+                order_params.append(int(text))
             else:
                 base = (f"SELECT c.*, {_OWNED_SQL} FROM cards_fts "
                         "JOIN cards c ON c.id = cards_fts.rowid "
                         "WHERE cards_fts MATCH ?")
                 params.append(f'"{safe}"*')
-                order = " ORDER BY cards_fts.rank LIMIT ?"
+                order, order_params = _name_rank_order(text)
         else:
             base = base_select + " WHERE 1=1"
 
@@ -180,8 +210,7 @@ class CardRepository:
                 "EXISTS (SELECT 1 FROM collection col WHERE col.card_id = c.id)"
             )
 
-        if text.isdigit() and not is_set_code(text):
-            params.append(int(text))            # (c.id = ?) DESC: Passcode zuerst
+        params += order_params
         sql = base + "".join(" AND " + c for c in clauses) + order
         params.append(limit)
 

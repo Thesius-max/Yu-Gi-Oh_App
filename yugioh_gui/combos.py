@@ -13,13 +13,14 @@ from PySide6.QtGui import QColor, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget
+    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QStackedWidget,
+    QTextEdit, QVBoxLayout, QWidget
 )
 
 import yugioh_db as ydb
 
 from .carddetail import CardSearchDialog
+from .widgets import EmptyHintList
 from .labels import PIECE_ROLE_DATA, ROLE_DE
 from .notation import NOTATION_MD
 from .repository import CardRepository
@@ -156,7 +157,7 @@ class ComboView(QWidget):
         self.search_edit.textChanged.connect(self._search_timer.start)
         lv.addWidget(self.search_edit)
         lv.addWidget(QLabel("Meine Kombos:"))
-        self.combo_list = QListWidget()
+        self.combo_list = EmptyHintList()
         self.combo_list.currentItemChanged.connect(self._on_select)
         lv.addWidget(self.combo_list, stretch=1)
         btn_row = QHBoxLayout()
@@ -270,8 +271,21 @@ class ComboView(QWidget):
         self.lint_label.setVisible(False)
         rv.addWidget(self.lint_label)
 
+        # Ohne gewaehlte Kombo statt eines ausgegrauten Editors ein Hinweis.
+        self.editor_stack = QStackedWidget()
+        empty = QLabel(
+            "Keine Kombo gewählt.\n\nWähle links eine Kombo oder lege mit "
+            "„Neue Kombo“ eine an. Kombos entstehen auch im Deck-Tab („Neue "
+            "Kombo aus diesem Deck…“) und per „● Aufzeichnen“ im Spielfeld.")
+        empty.setObjectName("HintLabel")
+        empty.setWordWrap(True)
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setMargin(40)
+        self.editor_stack.addWidget(empty)
+        self.editor_stack.addWidget(self.editor)
+
         splitter.addWidget(left)
-        splitter.addWidget(self.editor)
+        splitter.addWidget(self.editor_stack)
         splitter.setSizes([260, 640])
         outer = QVBoxLayout(self)
         outer.addWidget(splitter)
@@ -291,7 +305,7 @@ class ComboView(QWidget):
         self.steps_edit.textChanged.connect(self._on_editor_changed)
         self.steps_edit.textChanged.connect(self._update_lint)
 
-        self.editor.setEnabled(False)
+        self._set_editor_active(False)
         self.refresh()
 
     # -- Liste / Auswahl ----------------------------------------------------
@@ -324,13 +338,24 @@ class ComboView(QWidget):
                 vitem.setData(Qt.ItemDataRole.UserRole, v["combo_id"])
                 self.combo_list.addItem(vitem)
         self.combo_list.blockSignals(False)
+        filtered = bool(self.search_edit.text().strip()
+                        or self.deck_filter_cb.currentData() is not None)
+        self.combo_list.set_hint(
+            "Keine Kombo passt zu Suche oder Deck-Filter." if filtered else
+            "Noch keine Kombos — „Neue Kombo“ legt die erste an.")
         if keep is not None and self._select_combo(keep):
             return
         # Aktive Kombo fiel aus dem Filter (oder es gibt keine): Editor leeren,
         # damit Eingaben nicht versehentlich eine unsichtbare Kombo treffen.
         self.combo_id = None
         self._clear_editor()
-        self.editor.setEnabled(False)
+        self._set_editor_active(False)
+
+    def _set_editor_active(self, on: bool) -> None:
+        """Editor zeigen (Kombo gewaehlt) oder den Hinweis statt seiner."""
+        self.editor.setEnabled(on)
+        self.editor_stack.setCurrentWidget(
+            self.editor if on else self.editor_stack.widget(0))
 
     def _reload_deck_filter(self) -> None:
         """Deck-Filter neu aufbauen (Decks koennen sich geaendert haben);
@@ -439,7 +464,7 @@ class ComboView(QWidget):
         if current is None:
             self.combo_id = None
             self._clear_editor()
-            self.editor.setEnabled(False)
+            self._set_editor_active(False)
             return
         self.combo_id = current.data(Qt.ItemDataRole.UserRole)
         combo = ydb.get_combo(self.repo.db_path, self.combo_id)
@@ -455,7 +480,7 @@ class ComboView(QWidget):
         self._populate_parent(combo)
         self._load_pieces()
         self._refresh_collection_coverage()
-        self.editor.setEnabled(True)
+        self._set_editor_active(True)
 
     def _clear_editor(self) -> None:
         self._loading = True

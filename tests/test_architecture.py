@@ -76,7 +76,7 @@ class GuiLayerTests(unittest.TestCase):
         for leaf in ("theme", "labels", "tasks", "images", "exporting",
                      "repository", "notation", "carddetail", "_cardinst",
                      "_game", "_rules", "playtest_dialogs", "docview",
-                     "navigation", "rulebook_text"):
+                     "navigation", "rulebook_text", "widgets"):
             _, relative = _imports(GUI_PKG / f"{leaf}.py")
             self.assertEqual(relative & (self.VIEWS | {"mainwindow", "app"}), set(), leaf)
 

@@ -19,7 +19,7 @@ from tests._support import HAS_QT, QtTestCase
 
 if HAS_QT:
     from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtWidgets import QDialog, QMessageBox, QSpinBox
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QSpinBox
 
     from yugioh_gui.collection import CollectionView
     from yugioh_gui.combos import ComboView
@@ -121,6 +121,17 @@ class DeckViewTests(_ViewTestCase):
         if deck is not None:
             view.select_deck(deck)
         return view
+
+    def test_empty_views_show_hints(self):
+        deck = ydb.create_deck(self.db, "AAA Leer")
+        view = self._view(deck)
+        for zone, panel in view.panels.items():
+            self.assertEqual(panel.list.count(), 0)
+            self.assertTrue(panel.list.hint(), zone)
+        self.assertIn("„+ Karte hinzufügen“", view.panels["main"].list.hint())
+        self.assertIn("Side Deck", view.panels["side"].list.hint())
+        self.assertIn("Keine Kombo zu diesem Deck", view.combo_list.hint())
+        self.assertIn("Wähle oben eine Kombo", view.combo_pieces.hint())
 
     def test_initial_deck_and_status(self):
         view = self._view()
@@ -458,6 +469,26 @@ class CollectionViewTests(_ViewTestCase):
         return next(r for r in range(view.table.rowCount())
                     if view._card_id_at(r) == card_id)
 
+    def test_compact_table_layout(self):
+        view = self.track(CollectionView(self.repo))
+        view.resize(1200, 700)
+        view.show()
+        QApplication.processEvents()
+        view._apply_filters()
+        header = view.table.horizontalHeader()
+        self.assertTrue(header.defaultAlignment() & Qt.AlignmentFlag.AlignLeft)
+        self.assertEqual(view.table.columnWidth(view.COL_QTY), 70)
+        # "Drucke" so breit wie der laengste Eintrag (gedeckelt), der Name
+        # bekommt den Rest.
+        fm = view.table.fontMetrics()
+        widest = max([fm.horizontalAdvance("Drucke")]
+                     + [fm.horizontalAdvance(view.table.item(r, view.COL_PRINTS).text())
+                        for r in self._data_rows(view)])
+        expected = min(widest + 28, max(160, view.table.viewport().width() // 2))
+        self.assertEqual(view.table.columnWidth(view.COL_PRINTS), expected)
+        self.assertGreater(view.table.columnWidth(0), view.table.columnWidth(view.COL_PRINTS))
+        self.assertLess(view.table.verticalHeader().defaultSectionSize(), 30)
+
     def test_one_row_per_card_with_prints(self):
         """Eine Karte = eine Zeile; die Drucke schluesseln nur die Menge auf."""
         cid = self.unowned_ids(1)[0]
@@ -667,6 +698,13 @@ class ComboViewTests(_ViewTestCase):
         view = self._view()
         self.assertEqual(view.combo_list.count(), 0)
         self.assertFalse(view.editor.isEnabled())
+        # Statt eines ausgegrauten Editors: Hinweis, wie man anfaengt.
+        self.assertIsNot(view.editor_stack.currentWidget(), view.editor)
+        self.assertIn("Keine Kombo gewählt", view.editor_stack.currentWidget().text())
+        self.assertIn("Noch keine Kombos", view.combo_list.hint())
+        view.search_edit.setText("gibt es nicht")
+        view.refresh()
+        self.assertIn("passt zu Suche", view.combo_list.hint())
         self.assertEqual([view.deck_filter_cb.itemText(i) for i in range(view.deck_filter_cb.count())],
                          ["(alle)", "(ohne Heimat-Deck)",
                           *(d["name"] for d in ydb.list_decks(self.db))])

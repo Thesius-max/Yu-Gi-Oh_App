@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 import yugioh_db as ydb
 
 from .carddetail import CardDetailDialog, CardSearchDialog
+from .widgets import EmptyHintList
 from .deck_dialogs import (
     ComboFromDeckDialog, DeckCorpusDiffDialog, ReferenceDeckDialog,
     ShoppingListDialog,
@@ -41,6 +42,17 @@ from .repository import CardRepository
 
 
 
+# Hinweis in leeren Zonen (statt eines leeren Kastens).
+_ZONE_HINTS = {
+    "main": "Noch keine Karten — „+ Karte hinzufügen“ sucht und legt sie ab.",
+    "extra": "Noch keine Karten — Fusion, Synchro, Xyz und Link landen "
+             "automatisch hier.",
+    "side": "Leer — Karten fürs Side Deck mit „+ Karte hinzufügen“ oder "
+            "„→ Side“ aus Main/Extra.",
+}
+_NO_DECK_HINT = "Kein Deck gewählt — oben „Neues Deck“ oder ein Deck auswählen."
+
+
 class ZonePanel(QGroupBox):
     """Eine Deck-Zone: Liste der Karten plus Steuerleiste."""
 
@@ -51,7 +63,7 @@ class ZonePanel(QGroupBox):
         self._shortages: dict[int, int] = {}
 
         v = QVBoxLayout(self)
-        self.list = QListWidget()
+        self.list = EmptyHintList(_ZONE_HINTS[zone])
         v.addWidget(self.list)
         # Schwebende Kartenbild-Vorschau beim Ueberfahren einer Karte.
         self._hover = HoverCardPreview(self.list, self._hover_card_id)
@@ -231,14 +243,16 @@ class DeckView(QWidget):
         kombos_tab = QWidget()
         kv = QVBoxLayout(kombos_tab)
         kv.addWidget(QLabel("Kombos nach Abdeckung:"))
-        self.combo_list = QListWidget()
+        self.combo_list = EmptyHintList()
         self.combo_list.currentItemChanged.connect(self._on_combo_selected)
         kv.addWidget(self.combo_list, stretch=1)
         kv.addWidget(QLabel("Bausteine (vorhanden / benötigt):"))
-        self.combo_pieces = QListWidget()
+        self.combo_pieces = EmptyHintList("Wähle oben eine Kombo — hier "
+                                          "stehen ihre Bausteine.")
         kv.addWidget(self.combo_pieces, stretch=1)
         kv.addWidget(QLabel("Schritte:"))
-        self.combo_steps = QListWidget()
+        self.combo_steps = EmptyHintList("Die Schritte der gewählten Kombo "
+                                         "erscheinen hier.")
         self.combo_steps.setWordWrap(True)
         kv.addWidget(self.combo_steps, stretch=1)
         self.add_missing_btn = QPushButton("Fehlende Bausteine ins Deck")
@@ -980,7 +994,11 @@ class DeckView(QWidget):
         self.combo_pieces.clear()
         self.combo_steps.clear()
         if self.deck_id is None or not self.repo.exists():
+            self.combo_list.set_hint(_NO_DECK_HINT)
             return
+        self.combo_list.set_hint(
+            "Keine Kombo zu diesem Deck. Kombos legst du im Tab „Kombos“ an — "
+            "oder hier mit „Neue Kombo aus diesem Deck…“.")
         for c in ydb.combos_for_deck(self.repo.db_path, self.deck_id):
             if c["total"] == 0:
                 label = f"{c['name']}  (keine Bausteine)"

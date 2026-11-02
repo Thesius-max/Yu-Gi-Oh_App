@@ -16,7 +16,7 @@ import collections
 import itertools
 import random
 
-from PySide6.QtCore import QPoint, QPointF, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QImage, QKeySequence, QPainter, QPen, QPixmap,
     QPixmapCache, QPolygonF, QShortcut, QTransform
@@ -51,8 +51,13 @@ from .theme import _BG, _GOLD, _TEXT
 # Spielfeld — eigener Tab
 # ---------------------------------------------------------------------------
 
-_CARD_W, _CARD_H = 74, 106     # Brettkarten-Groesse (aufrecht)
-_ZONE_W = _ZONE_H = 112        # Zelle: fasst Karte aufrecht UND um 90° gedreht
+# Bezugsgroessen (Faktor 1): Karte aufrecht, Zelle fasst sie aufrecht UND
+# um 90° gedreht. Tatsaechlich skaliert das Brett mit der Fensterhoehe
+# (PlayTestView._fit_board), damit Brett und Hand ohne Scrollen sichtbar sind.
+_CARD_W, _CARD_H = 74, 106
+_ZONE_W = _ZONE_H = 112
+_ZONE_MIN, _ZONE_MAX = 64, 150   # Zellgroesse in px (darunter: scrollen)
+_OPP_SCALE = 0.8                 # Gegnerreihen kompakter als die eigenen
 _LOG_MAX = 300
 
 _METHOD_LABELS = {
@@ -273,8 +278,12 @@ class PlayTestView(QWidget):
         grid = QGridLayout()
         grid.setSpacing(4)
 
+        self._zone_px = _ZONE_W                 # aktuelle Zellgroesse (eigene Seite)
+        self._grid = grid
+
         def zone(key, r, c):
-            z = _Zone(key, _ZONE_W, _ZONE_H)
+            px = self._zone_size(key.startswith("o"))
+            z = _Zone(key, px, px)
             z.clicked.connect(self._on_zone_clicked)
             self._zones[key] = z
             grid.addWidget(z, r, c)
@@ -312,16 +321,25 @@ class PlayTestView(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFixedHeight(_CARD_H + 24)
         scroll.setWidget(self._hand_host)
+        self._hand_scroll = scroll
         left.addWidget(scroll)
         left.addStretch()
-        # Brett + Hand scrollen, statt die Mindesthoehe des Hauptfensters
-        # (fuenf Zonen-Reihen) auf kleine Bildschirme durchzudruecken.
+        self._left = left
+        # Das Brett skaliert mit der sichtbaren Flaeche (_fit_board); erst
+        # unterhalb der Mindest-Zellgroesse wird gescrollt, statt die
+        # Mindesthoehe des Hauptfensters hochzudruecken.
         left_host = QWidget()
         left_host.setLayout(left)
         board_scroll = QScrollArea()
         board_scroll.setWidgetResizable(True)
         board_scroll.setFrameShape(QFrame.Shape.NoFrame)
         board_scroll.setWidget(left_host)
+        self._board_scroll = board_scroll
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.setInterval(0)
+        self._fit_timer.timeout.connect(self._fit_board)
+        board_scroll.viewport().installEventFilter(self)
         body.addWidget(board_scroll, stretch=1)
 
         # -- Seitenleiste: LP, Gegner, Marken, Protokoll ------------------------
@@ -1634,18 +1652,63 @@ class PlayTestView(QWidget):
         self._detail_dialog.raise_()
         self._detail_dialog.activateWindow()
 
+    # -- Brettgroesse ---------------------------------------------------------
+
+    def _zone_size(self, opp: bool = False) -> int:
+        return round(self._zone_px * _OPP_SCALE) if opp else self._zone_px
+
+    def _card_size(self, opp: bool = False) -> tuple[int, int]:
+        z = self._zone_size(opp)
+        return round(z * _CARD_W / _ZONE_W), round(z * _CARD_H / _ZONE_H)
+
+    def eventFilter(self, obj, event) -> bool:
+        if (event.type() == QEvent.Type.Resize
+                and obj is self._board_scroll.viewport()):
+            self._fit_timer.start()        # nach dem Layout-Durchlauf anpassen
+        return super().eventFilter(obj, event)
+
+    def _fitted_zone_px(self, width: int, height: int) -> int:
+        """Groesste Zellgroesse, bei der Brett (eigene Reihen, EMZ-Reihe,
+        kompakte Gegnerreihen) und Hand in width x height passen."""
+        opp = self.opp_check.isChecked()
+        rows = 5 if opp else 3
+        sp = self._grid.spacing()
+        m = self._left.contentsMargins()
+        fixed_h = (sp * (rows - 1) + 24 + self.hand_label.sizeHint().height()
+                   + 3 * self._left.spacing() + m.top() + m.bottom()
+                   + 12)          # Rahmen der Hand-Scrollflaeche u. ae.
+        per_zone = (3 + (2 * _OPP_SCALE if opp else 0)) + _CARD_H / _ZONE_H
+        by_height = (height - fixed_h) / per_zone
+        by_width = (width - 6 * sp - m.left() - m.right() - 4) / 7
+        return max(_ZONE_MIN, min(_ZONE_MAX, int(min(by_height, by_width))))
+
+    def _fit_board(self) -> None:
+        """Zellen, Karten und Handzeile an die sichtbare Flaeche anpassen."""
+        vp = self._board_scroll.viewport().size()
+        px = self._fitted_zone_px(vp.width(), vp.height())
+        if px == self._zone_px:
+            return
+        self._zone_px = px
+        for key, z in self._zones.items():
+            size = self._zone_size(key.startswith("o"))
+            z.setFixedSize(size, size)
+        self._hand_scroll.setFixedHeight(self._card_size()[1] + 24)
+        self._render()
+
     # -- Bilder -------------------------------------------------------------
 
-    def _pixmap_for(self, inst: _CardInst, board: bool = False) -> QPixmap:
+    def _pixmap_for(self, inst: _CardInst, board: bool = False,
+                    opp: bool = False) -> QPixmap:
+        w, h = self._card_size(opp)
         if inst.face_down:
-            pm = card_back_pixmap(_CARD_W, _CARD_H)
+            pm = card_back_pixmap(w, h)
         else:
-            pm = (lookup_card_pixmap(inst.card_id, _CARD_W, _CARD_H, "board")
+            pm = (lookup_card_pixmap(inst.card_id, w, h, f"board{w}x{h}")
                   if inst.card_id > 0 else None)
             if pm is None:
                 if inst.card_id > 0:
                     self._ensure_image(inst.card_id)
-                pm = placeholder_pixmap(inst.name, _CARD_W, _CARD_H)
+                pm = placeholder_pixmap(inst.name, w, h)
         if board:
             pm = self._decorate(pm, inst)
         if inst.defense:
@@ -1717,9 +1780,10 @@ class PlayTestView(QWidget):
         )
 
     def _on_img_loaded(self, card_id: int, img: QImage) -> None:
-        QPixmapCache.insert(
-            f"board:{card_id}", scale_pixmap(QPixmap.fromImage(img), _CARD_W, _CARD_H)
-        )
+        pix = QPixmap.fromImage(img)
+        for opp in (False, True):
+            w, h = self._card_size(opp)
+            QPixmapCache.insert(f"board{w}x{h}:{card_id}", scale_pixmap(pix, w, h))
         self._loading_imgs.discard(card_id)
         self._render_timer.start()   # gebuendelt neu zeichnen
 
@@ -1747,8 +1811,9 @@ class PlayTestView(QWidget):
             lines.append(f"📌 {n} eigene Ruling(s) — Rechtsklick → Details… → Rulings")
         return "\n".join(lines)
 
-    def _make_card(self, inst: _CardInst, board: bool = False) -> _BoardCard:
-        card = _BoardCard(inst, self._pixmap_for(inst, board),
+    def _make_card(self, inst: _CardInst, board: bool = False,
+                   opp: bool = False) -> _BoardCard:
+        card = _BoardCard(inst, self._pixmap_for(inst, board, opp),
                           held=(inst is self._held))
         card.setToolTip(self._tooltip(inst))
         card.clicked.connect(self._on_card_clicked)
@@ -1762,8 +1827,8 @@ class PlayTestView(QWidget):
         lbl.setObjectName("ZonePlaceholder")
         return lbl
 
-    def _pile_widget(self, name: str, count: int,
-                     back: bool = False, top: _CardInst = None) -> QWidget:
+    def _pile_widget(self, name: str, count: int, back: bool = False,
+                     top: _CardInst = None, opp: bool = False) -> QWidget:
         host = QWidget()
         host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         v = QVBoxLayout(host)
@@ -1773,9 +1838,9 @@ class PlayTestView(QWidget):
         img = QLabel()
         img.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         if top is not None:
-            img.setPixmap(self._pixmap_for(top))
+            img.setPixmap(self._pixmap_for(top, opp=opp))
         elif back and count:
-            img.setPixmap(card_back_pixmap(_CARD_W, _CARD_H))
+            img.setPixmap(card_back_pixmap(*self._card_size(opp)))
         v.addWidget(img, alignment=Qt.AlignmentFlag.AlignCenter)
         cap = QLabel(f"{name} {count}")
         cap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -1787,6 +1852,7 @@ class PlayTestView(QWidget):
         for key, z in self._zones.items():
             if key.startswith("o"):
                 z.setVisible(show)
+        self._fit_board()               # ohne Gegnerreihen: groessere Karten
 
     def _hint_zones(self) -> set[str]:
         """Gueltige Zielzonen fuer ein aufgenommenes Extra-Deck-Monster."""
@@ -1810,8 +1876,8 @@ class PlayTestView(QWidget):
         hints = self._hint_zones()
         for key, inst in slots.items():
             self._zones[key].set_content(
-                self._make_card(inst, board=True) if inst is not None
-                else self._zone_placeholder(key)
+                self._make_card(inst, board=True, opp=key.startswith("o"))
+                if inst is not None else self._zone_placeholder(key)
             )
             self._zones[key].set_hint(key in hints)
         me, opp = g.me, g.opp
@@ -1822,7 +1888,8 @@ class PlayTestView(QWidget):
         for key, name, pile in (("gy", "GY", me.gy), ("banished", "Bann", me.banished),
                                 ("ogy", "GY", opp.gy), ("obanished", "Bann", opp.banished)):
             self._zones[key].set_content(
-                self._pile_widget(name, len(pile), top=pile[-1] if pile else None))
+                self._pile_widget(name, len(pile), top=pile[-1] if pile else None,
+                                  opp=key.startswith("o")))
         # Hand
         while self._hand_row.count():
             old = self._hand_row.takeAt(0).widget()

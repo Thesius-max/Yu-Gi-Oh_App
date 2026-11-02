@@ -129,6 +129,24 @@ class RepositoryTests(QtTestCase):
         ydb.add_to_collection(self.db, 46986414, 1, set_code="XYZ9-DE999")
         self.assertEqual([r["id"] for r in self.repo.query(text="xyz9-de999")], [46986414])
 
+    def test_name_matches_rank_before_text_matches(self):
+        def names(text):
+            return [r["name"] for r in self.repo.query(text=text)]
+        # "Ash" steht auch in vielen Kartentexten/Namen ("Ashened") -- die
+        # Karte, deren Name mit dem Wort beginnt, kommt zuerst.
+        self.assertEqual(names("Ash")[0], "Ash Blossom & Joyous Spring")
+        self.assertEqual(names("Dark Magician")[0], "Dark Magician")      # exakt
+        self.assertEqual(names("Raigeki")[0], "Raigeki")
+        de = self.repo.get_card(46986414)["name_de"]
+        self.assertEqual(self.repo.query(text=de.lower())[0]["id"], 46986414)
+        # Platzhalter in der Eingabe sind Text, kein LIKE-Muster.
+        self.assertIsInstance(self.repo.query(text="50%_\\"), list)
+        # Name-Treffer stehen geschlossen vor reinen Text-Treffern.
+        rows = self.repo.query(text="Ash", limit=5000)
+        in_name = ["ash" in (r["name"] + " " + (r["name_de"] or "")).casefold()
+                   for r in rows]
+        self.assertEqual(in_name, sorted(in_name, reverse=True))
+
     def test_owned_column_and_helpers(self):
         ydb.add_to_collection(self.db, 14558127, 2, set_code="RA01-DE008")
         owned = self.repo.owned_count(14558127)
@@ -757,6 +775,31 @@ class ThemeAndManualTests(QtTestCase):
         for row in range(view.index.count()):
             view.index.setCurrentRow(row)
             self.assertTrue(view.content.toPlainText().strip(), titles[row])
+
+    def test_doc_texts_are_readable(self):
+        from yugioh_gui.manual import HelpView
+        from PySide6.QtGui import QTextFormat
+        view = self.track(HelpView())
+        self.assertIn("Die sieben Tabs", view.content.toPlainText())
+        # Hinweis-Bloecke ('> ...') als Kasten: wenig Einzug, Hintergrund.
+        quotes = []
+        block = view.content.document().begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.intProperty(QTextFormat.Property.BlockQuoteLevel):
+                quotes.append(fmt)
+            block = block.next()
+        self.assertTrue(quotes)
+        self.assertTrue(all(f.leftMargin() == 8 and f.rightMargin() == 0
+                            and f.background().style() != Qt.BrushStyle.NoBrush
+                            for f in quotes))
+        # Breites Fenster: Zeilen brechen nach ~95 Zeichen um.
+        view.resize(2400, 700)
+        view.show()
+        QApplication.processEvents()
+        limit = view.content.fontMetrics().averageCharWidth() * 95
+        self.assertEqual(view.content.lineWrapColumnOrWidth(), limit)
+        self.assertLess(view.index.width(), view.content.width() // 3)
 
     def test_notation_reference(self):
         from yugioh_gui.notation import NOTATION_MD

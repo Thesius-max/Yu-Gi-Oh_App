@@ -341,9 +341,17 @@ class CollectionView(QWidget):
         self.table.setItemDelegateForColumn(self.COL_QTY, _QuantityDelegate(self.table))
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.verticalHeader().setVisible(False)
+        # Kompakte Zeilen; der Name bekommt den Platz, "Drucke" nur so viel,
+        # wie die laengste Aufschluesselung braucht (_fit_prints_column).
+        self.table.verticalHeader().setDefaultSectionSize(
+            self.fontMetrics().height() + 10)
         header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft
+                                   | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(self.COL_PRINTS, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(self.COL_QTY, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(self.COL_PRINTS, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(self.COL_QTY, 70)
 
         layout.addLayout(toolbar)
         layout.addLayout(filters)
@@ -465,10 +473,24 @@ class CollectionView(QWidget):
         finally:
             self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
+        self._fit_prints_column()
         if keep_card is not None:
             self._select_card(keep_card)
         self.table.verticalScrollBar().setValue(keep_scroll)
         self._update_summary()
+
+    def _fit_prints_column(self) -> None:
+        """Spalte "Drucke" einmal nach dem Befuellen auf ihren laengsten
+        Eintrag setzen (gedeckelt). Bewusst kein ResizeToContents: das misst
+        bei sichtbarer Tabelle nach jedem setItem neu (Einfrieren, s. 0.9.3)."""
+        fm = self.table.fontMetrics()
+        widest = fm.horizontalAdvance(self.COLUMNS[self.COL_PRINTS])
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, self.COL_PRINTS)
+            if item is not None and item.text():
+                widest = max(widest, fm.horizontalAdvance(item.text()))
+        cap = max(160, self.table.viewport().width() // 2)
+        self.table.setColumnWidth(self.COL_PRINTS, min(widest + 28, cap))
 
     def _card_id_at(self, row: int):
         """card_id der Tabellenzeile oder None (Kopfzeile/keine Zeile)."""

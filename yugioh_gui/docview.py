@@ -5,19 +5,54 @@ Kapitelliste, rechts das gewaehlte Kapitel als gerendertes Markdown. Die
 Suche filtert Kapitel nach Titel und Text (casefold, also auch 'Ü'/'ü')
 und springt im gezeigten Kapitel zur ersten Fundstelle. Links: 'card:<id>'
 oeffnet die Kartendetails (navigation.open_card), 'rulebook:<key>' ein
-Kapitel dieser Ansicht, alles andere der Browser.
+Kapitel dieser Ansicht, alles andere der Browser. Lesbarkeit: Zeilen
+werden auf ~95 Zeichen begrenzt, Zitatbloecke ('> Hinweis') als dezente
+Kaesten statt weit eingerueckt dargestellt.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QSplitter, QTextBrowser,
     QVBoxLayout, QWidget
 )
 
 from . import navigation
+from .theme import _PANEL
+
+_MAX_LINE_CHARS = 95     # laengere Zeilen liest man schlecht
+
+
+class _ReadableBrowser(QTextBrowser):
+    """QTextBrowser mit begrenzter Zeilenbreite: bei breitem Fenster bricht
+    der Text nach ~_MAX_LINE_CHARS Zeichen um, statt ueber die volle Breite
+    zu laufen; schmaler als das bleibt er an die Fensterbreite gebunden."""
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        limit = self.fontMetrics().averageCharWidth() * _MAX_LINE_CHARS
+        width = min(self.viewport().width() - 4, limit)
+        if width != self.lineWrapColumnOrWidth():
+            self.setLineWrapMode(QTextBrowser.LineWrapMode.FixedPixelWidth)
+            self.setLineWrapColumnOrWidth(max(width, 100))
+
+    def set_markdown(self, md: str) -> None:
+        """Markdown setzen und Zitatbloecke als Hinweis-Kaesten gestalten
+        (Qt rueckt sie sonst links und rechts um 40 px ein)."""
+        self.setMarkdown(md)
+        doc = self.document()
+        block = doc.begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.intProperty(QTextFormat.Property.BlockQuoteLevel):
+                fmt.setLeftMargin(8)
+                fmt.setRightMargin(0)
+                fmt.setBackground(QColor(_PANEL))
+                cursor = QTextCursor(block)
+                cursor.setBlockFormat(fmt)
+            block = block.next()
 
 
 class DocView(QWidget):
@@ -50,11 +85,14 @@ class DocView(QWidget):
         lv.addWidget(self.hits)
         splitter.addWidget(left)
 
-        self.content = QTextBrowser()
+        self.content = _ReadableBrowser()
         self.content.setOpenLinks(False)
         self.content.anchorClicked.connect(self._on_link)
         splitter.addWidget(self.content)
-        splitter.setSizes([240, 760])
+        # Kapitelliste schmal halten; zusaetzliche Breite geht an den Text.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([210, 790])
 
         outer = QVBoxLayout(self)
         outer.addWidget(splitter)
@@ -65,7 +103,7 @@ class DocView(QWidget):
     def _show_row(self, row: int) -> None:
         if not 0 <= row < len(self._sections):
             return
-        self.content.setMarkdown(self._sections[row][2])
+        self.content.set_markdown(self._sections[row][2])
         self.content.verticalScrollBar().setValue(0)
         term = self.search.text().strip()
         if term:
